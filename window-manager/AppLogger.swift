@@ -12,6 +12,7 @@ enum AppLog {
     static let indicator = Logger(subsystem: subsystem, category: "indicator")
     static let hotKey = Logger(subsystem: subsystem, category: "hotkey")
     static let loginItem = Logger(subsystem: subsystem, category: "login-item")
+    static let monitorState = Logger(subsystem: subsystem, category: "monitor-state")
 
     static func debug(_ message: String, logger: Logger = app) {
 #if DEBUG

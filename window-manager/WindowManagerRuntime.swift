@@ -7,12 +7,23 @@ import Foundation
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let indicatorController = IndicatorWindowController()
     private let loginItemRegistrar = LoginItemRegistrar()
+    private let monitorStateStore = MonitorStateStore()
     private var hotKeyMonitor: GlobalHotKeyMonitor?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         AppLog.info("App launched")
         loginItemRegistrar.registerIfNeeded()
+
+        monitorStateStore.onMonitorsChanged = { [weak self] in
+            guard let self else {
+                return
+            }
+
+            self.indicatorController.updateIfVisible(text: self.monitorStateStore.debugText())
+        }
+
+        monitorStateStore.startWatching()
 
         hotKeyMonitor = GlobalHotKeyMonitor(key: "s", modifiers: [.option]) { [weak self] in
             Task { @MainActor [weak self] in
@@ -35,6 +46,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         hotKeyMonitor?.stop()
+        monitorStateStore.onMonitorsChanged = nil
+        monitorStateStore.stopWatching()
     }
 
     @MainActor
@@ -45,6 +58,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        indicatorController.toggle(text: "Window manager active")
+        indicatorController.toggle(text: monitorStateStore.debugText())
     }
 }
