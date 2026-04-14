@@ -10,13 +10,13 @@ final class IndicatorWindowController {
     private let horizontalPadding: CGFloat = 26
     private let verticalPadding: CGFloat = 18
 
-    private var panel: NSPanel?
+    private var panels: [String: NSPanel] = [:] // screenID -> panel
     private var hideTask: DispatchWorkItem?
-    private var isVisible = false
+    private(set) var isVisible = false
 
-    func show(text: String, duration: TimeInterval? = 1.25) {
+    func show(textsByScreenID: [String: String], duration: TimeInterval? = 1.25) {
         hideTask?.cancel()
-        render(text: text)
+        render(textsByScreenID: textsByScreenID)
         isVisible = true
 
         guard let duration else {
@@ -30,40 +30,63 @@ final class IndicatorWindowController {
         DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: task)
     }
 
-    func toggle(text: String) {
+    func show(text: String, duration: TimeInterval? = 1.25) {
+        // Fallback for simple messages
+        let texts = NSScreen.screens.reduce(into: [String: String]()) { acc, screen in
+            let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")].map { String(describing: $0) } ?? "unknown"
+            acc[id] = text
+        }
+        show(textsByScreenID: texts, duration: duration)
+    }
+
+    func toggle(textsByScreenID: [String: String]) {
         if isVisible {
-            AppLog.debug("Hiding indicator via toggle", logger: AppLog.indicator)
+            AppLog.debug("Hiding indicators via toggle", logger: AppLog.indicator)
             hide()
         } else {
-            show(text: text, duration: nil)
+            show(textsByScreenID: textsByScreenID, duration: nil)
         }
     }
 
-    func updateIfVisible(text: String) {
+    func updateIfVisible(textsByScreenID: [String: String]) {
         guard isVisible else {
             return
         }
 
-        AppLog.debug("Updating visible indicator", logger: AppLog.indicator)
-        render(text: text)
+        AppLog.debug("Updating visible indicators", logger: AppLog.indicator)
+        render(textsByScreenID: textsByScreenID)
     }
 
     func hide() {
         hideTask?.cancel()
         hideTask = nil
-        panel?.orderOut(nil)
+        for panel in panels.values {
+            panel.orderOut(nil)
+        }
         isVisible = false
     }
 
-    private func render(text: String) {
-        let panel = panel ?? makePanel()
-        let label = makeLabel(text: text)
+    private func render(textsByScreenID: [String: String]) {
+        // Clean up panels for screens that no longer exist
+        let screenIDs = Set(textsByScreenID.keys)
+        for id in panels.keys where !screenIDs.contains(id) {
+            panels[id]?.orderOut(nil)
+            panels.removeValue(forKey: id)
+        }
 
-        panel.contentView = label
-        panel.setFrame(centeredFrame(for: panel, size: label.fittingSize), display: true)
-        panel.orderFrontRegardless()
+        for screen in NSScreen.screens {
+            let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")].map { String(describing: $0) } ?? "unknown"
+            guard let text = textsByScreenID[id] else { continue }
 
-        self.panel = panel
+            let panel = panels[id] ?? makePanel()
+            let label = makeLabel(text: text)
+
+            panel.contentView = label
+            panel.setFrame(centeredFrame(for: panel, screen: screen, size: label.fittingSize), display: true)
+            panel.orderFrontRegardless()
+
+            panels[id] = panel
+        }
     }
 
     private func makePanel() -> NSPanel {
@@ -128,8 +151,8 @@ final class IndicatorWindowController {
         return NSSize(width: width, height: height)
     }
 
-    private func centeredFrame(for panel: NSPanel, size: NSSize) -> NSRect {
-        let screenFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+    private func centeredFrame(for panel: NSPanel, screen: NSScreen, size: NSSize) -> NSRect {
+        let screenFrame = screen.visibleFrame
         return NSRect(
             x: screenFrame.midX - size.width / 2,
             y: screenFrame.midY - size.height / 2,

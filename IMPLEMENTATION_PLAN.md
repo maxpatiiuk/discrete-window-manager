@@ -7,11 +7,11 @@
 - **Manual Control**: Allow-list defaults, but provide a manual "managed" toggle.
 
 ## Phase 1: Foundation & Visibility (Priority)
-- [ ] **State Visualization (`alt+s`)**:
+- [x] **State Visualization (`alt+s`)**:
     - Implement a status window on each screen.
     - Display a vertical list of workspaces (App Name + Title).
     - Highlight the active workspace.
-- [ ] **Debug View (`alt+d`)**:
+- [x] **Debug View (`alt+d`)**:
     - Migrate current debug text to this shortcut.
 - [ ] **Logging & Performance**:
     - Add structured logging for every "Reconciliation" pass.
@@ -21,7 +21,7 @@
     - **Mocks**: Create a mockable `WindowActuator` protocol for AX operations.
 
 ## Phase 2: Workspace Management
-- [ ] **Window Classifier**:
+- [x] **Window Classifier**:
     - Bundle ID allow-list (Chrome, VS Code).
     - Manual toggle for "Managed" status (stored per Window ID).
     - Distinguish Chrome DevTools from Chrome via title.

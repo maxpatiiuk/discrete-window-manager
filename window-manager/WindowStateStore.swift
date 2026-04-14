@@ -11,6 +11,7 @@ final class WindowStateStore {
         let windowNumber: Int
         let ownerName: String
         let ownerPID: Int32
+        let bundleID: String?
         let title: String
         let bounds: NSRect
         let monitorName: String?
@@ -253,6 +254,7 @@ final class WindowStateStore {
         }
 
         var extracted: [WindowSnapshot] = []
+        var bundleIDByPID: [pid_t: String] = [:]
 
         for info in raw {
             guard let layer = info[kCGWindowLayer as String] as? Int,
@@ -274,6 +276,16 @@ final class WindowStateStore {
                 continue
             }
 
+            let bundleID: String?
+            if let cached = bundleIDByPID[ownerPID] {
+                bundleID = cached
+            } else {
+                bundleID = NSRunningApplication(processIdentifier: ownerPID)?.bundleIdentifier
+                if let bundleID {
+                    bundleIDByPID[ownerPID] = bundleID
+                }
+            }
+
             let title = (info[kCGWindowName as String] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "<untitled>"
             let monitorName = monitorName(for: cgBounds)
             let spaceID = (info["kCGWindowWorkspace"] as? NSNumber)?.intValue
@@ -283,6 +295,7 @@ final class WindowStateStore {
                     windowNumber: number,
                     ownerName: ownerName,
                     ownerPID: ownerPID,
+                    bundleID: bundleID,
                     title: title,
                     bounds: cgBounds,
                     monitorName: monitorName,
@@ -561,6 +574,7 @@ private extension WindowStateStore.WindowSnapshot {
             windowNumber: windowNumber,
             ownerName: ownerName,
             ownerPID: ownerPID,
+            bundleID: bundleID,
             title: title,
             bounds: bounds,
             monitorName: monitorName,
