@@ -5,8 +5,10 @@ Minimal macOS window-manager app built with Swift and Xcode.
 The app currently:
 
 - runs as an accessory app, so it does not appear in the Dock or Cmd-Tab
+- registers itself to launch at login
 - requests Accessibility permission on launch
-- can show temporary non-interactive indicator windows in the center of the screen
+- can show non-interactive indicator windows in the center of the screen
+- toggles a persistent indicator with `Option+S`
 
 ## Project Layout
 
@@ -23,13 +25,18 @@ You need:
 - Xcode installed from the App Store
 - Xcode Command Line Tools selected
 - VS Code with the Swift extension if you want to work in VS Code
-- Homebrew plus `xcode-build-server` if you want Swift navigation in VS Code for this Xcode project
 
 Verify the active Xcode toolchain:
 
 ```bash
 xcode-select -p
 xcrun --find sourcekit-lsp
+```
+
+Install xcode-build-server for usage by Swift VSCode extension:
+
+```bash
+brew install xcode-build-server
 ```
 
 ## First-Time Setup
@@ -48,35 +55,11 @@ xcodebuild -project window-manager.xcodeproj -scheme window-manager -destination
 
 This helps Xcode and SourceKit understand the target configuration.
 
-### 3. Set up VS Code Swift support for this Xcode project
-
-Swift Package Manager projects usually work directly in VS Code. Xcode projects usually need an extra adapter so `sourcekit-lsp` can understand the project build settings.
-
-Install the adapter:
-
-```bash
-brew install xcode-build-server
-```
-
-Generate the workspace config:
-
-```bash
-xcode-build-server config -project window-manager.xcodeproj -scheme window-manager
-```
-
-That creates `buildServer.json` in the repository root.
-
-Then in VS Code:
-
-- run `Swift: Select Toolchain` and choose the Xcode toolchain if needed
-- run `Swift: Restart SourceKit-LSP`
-- run `Developer: Reload Window`
-
-After that, features like Go to Definition should work.
-
 ## Running the App
 
 Run from Xcode with the `window-manager` scheme.
+
+On launch, the app attempts to register itself as a login item so it starts automatically in future login sessions.
 
 On first launch, macOS should prompt for Accessibility permission. If it does not, open:
 
@@ -85,6 +68,60 @@ On first launch, macOS should prompt for Accessibility permission. If it does no
 - Accessibility
 
 Then enable the app manually.
+
+Once the app is running, press `Option+S` to toggle the center-screen indicator.
+
+### Command-Line Control
+
+Because this is an accessory app, it does not have a Dock icon or normal app window. These commands are useful for starting and stopping it manually.
+
+Build the app from the command line:
+
+```bash
+xcodebuild -project window-manager.xcodeproj -scheme window-manager -destination 'platform=macOS' build
+```
+
+Start the latest Debug build:
+
+```bash
+open "$(ls -1dt ~/Library/Developer/Xcode/DerivedData/window-manager-* | head -n1)/Build/Products/Debug/window-manager.app"
+```
+
+Build a production-style Release build:
+
+```bash
+xcodebuild -project window-manager.xcodeproj -scheme window-manager -configuration Release -destination 'platform=macOS' build
+```
+
+Start the latest Release build:
+
+```bash
+open "$(ls -1dt ~/Library/Developer/Xcode/DerivedData/window-manager-* | head -n1)/Build/Products/Release/window-manager.app"
+```
+
+Check whether it is running:
+
+```bash
+pgrep -x window-manager
+```
+
+Show matching processes with command information:
+
+```bash
+ps -p "$(pgrep -x window-manager | paste -sd ' ' -)" -o pid=,etime=,command=
+```
+
+Stop all running instances:
+
+```bash
+pkill -x window-manager
+```
+
+Stop a specific instance:
+
+```bash
+kill <pid>
+```
 
 ## Logging
 
@@ -98,7 +135,7 @@ You can inspect logs in Console.app or from the terminal.
 Example live stream:
 
 ```bash
-log stream --predicate 'subsystem == "uk.patii.max.window-manager"'
+log stream --style compact --type log --level debug --predicate 'subsystem == "uk.patii.max.window-manager"'
 ```
 
 ## Development Notes

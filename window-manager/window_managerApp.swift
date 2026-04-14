@@ -1,9 +1,5 @@
 //
-//  window_managerApp.swift
-//  window-manager
-//
-//  Created by Max Patiiuk on 2026-04-14.
-//
+// SwiftUI app entrypoint that delegates lifecycle handling to AppDelegate for headless accessory behavior.
 
 import SwiftUI
 
