@@ -9,8 +9,8 @@ final class MonitorStateStore {
     struct MonitorSnapshot: Equatable {
         let id: String
         let name: String
-        let frame: NSRect
-        let visibleFrame: NSRect
+        let frame: NSRect        // Top-left coordinates
+        let visibleFrame: NSRect // Top-left coordinates
         let scale: CGFloat
         let isMain: Bool
     }
@@ -53,15 +53,24 @@ final class MonitorStateStore {
     }
 
     func refresh() {
-        let updated = NSScreen.screens.map { screen in
-            MonitorSnapshot(
+        let screens = NSScreen.screens
+        guard let primaryScreen = screens.first else { return }
+        let primaryHeight = primaryScreen.frame.height
+
+        let updated = screens.map { screen in
+            // Convert from Cocoa (bottom-left) to Global (top-left) coordinates
+            // In global coordinates, y=0 is the top of the primary screen.
+            let frame = cocoaToGlobal(screen.frame, primaryHeight: primaryHeight)
+            let visibleFrame = cocoaToGlobal(screen.visibleFrame, primaryHeight: primaryHeight)
+
+            return MonitorSnapshot(
                 id: screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")]
                     .map { String(describing: $0) } ?? "unknown",
                 name: screen.localizedName,
-                frame: screen.frame,
-                visibleFrame: screen.visibleFrame,
+                frame: frame,
+                visibleFrame: visibleFrame,
                 scale: screen.backingScaleFactor,
-                isMain: screen == NSScreen.main
+                isMain: screen == primaryScreen
             )
         }
 
@@ -70,6 +79,16 @@ final class MonitorStateStore {
             AppLog.info("Monitor topology updated (\(updated.count) display(s))", logger: AppLog.monitorState)
             onMonitorsChanged?()
         }
+    }
+
+    private func cocoaToGlobal(_ rect: NSRect, primaryHeight: CGFloat) -> NSRect {
+        // Cocoa: y=0 at bottom. Global: y=0 at top.
+        return NSRect(
+            x: rect.origin.x,
+            y: primaryHeight - (rect.origin.y + rect.size.height),
+            width: rect.size.width,
+            height: rect.size.height
+        )
     }
 
     func debugText() -> String {

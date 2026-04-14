@@ -74,12 +74,18 @@ final class IndicatorWindowController {
             panels.removeValue(forKey: id)
         }
 
+        var previousText = ""
         for screen in NSScreen.screens {
             let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")].map { String(describing: $0) } ?? "unknown"
             guard let text = textsByScreenID[id] else { continue }
 
             let panel = panels[id] ?? makePanel()
             let label = makeLabel(text: text)
+
+            if previousText != text {
+                AppLog.debug(text, logger: AppLog.indicator)
+                previousText = text
+            }
 
             panel.contentView = label
             panel.setFrame(centeredFrame(for: panel, screen: screen, size: label.fittingSize), display: true)

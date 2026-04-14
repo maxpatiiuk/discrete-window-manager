@@ -17,9 +17,14 @@ final class AXObserverManager {
         }
         isWatching = true
 
+        let currentPID = NSRunningApplication.current.processIdentifier
+
         // 1. Bootstrap currently running apps
         for app in NSWorkspace.shared.runningApplications {
-            attachObserver(to: app.processIdentifier)
+            let pid = app.processIdentifier
+            if pid != currentPID {
+                attachObserver(to: pid)
+            }
         }
 
         // 2. Watch for future app lifecycle events
@@ -28,8 +33,11 @@ final class AXObserverManager {
         workspaceObservers.append(
             nc.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { [weak self] notification in
                 guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+                let pid = app.processIdentifier
+                if pid == currentPID { return }
+                
                 Task { @MainActor [weak self] in
-                    self?.attachObserver(to: app.processIdentifier)
+                    self?.attachObserver(to: pid)
                 }
             }
         )

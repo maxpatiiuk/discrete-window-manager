@@ -34,6 +34,9 @@ final class WindowStateStore {
 
     private(set) var windows: [WindowSnapshot] = []
     var onWindowsChanged: (() -> Void)?
+    
+    // External state needed for monitor detection
+    var currentMonitors: [MonitorStateStore.MonitorSnapshot] = []
 
     // The new Orchestrator
     private let axManager = AXObserverManager()
@@ -46,10 +49,8 @@ final class WindowStateStore {
     private var refreshSequence = 0
 
     func startWatching() {
-        // 1. Initial State Load
         fullRefresh()
 
-        // 2. Setup the AX Observer Mesh (Sub-10ms triggers)
         axManager.handleWindowCreated = { [weak self] _, pid in
             Task { @MainActor [weak self] in
                 self?.requestRefresh(flags: [.appWindows], pids: [pid])
@@ -67,7 +68,6 @@ final class WindowStateStore {
         }
         axManager.startWatching()
 
-        // 3. Setup Global Workspace Triggers (Space changes & App lifecycle)
         let workspaceCenter = NSWorkspace.shared.notificationCenter
 
         observers.append(
@@ -130,21 +130,17 @@ final class WindowStateStore {
         AppLog.debug("Stopped window state watcher", logger: AppLog.windowState)
     }
 
-    /// Debounces rapid event bursts and executes the cheapest valid reconciliation.
     private func requestRefresh(flags: DirtyFlags, pids: Set<pid_t> = []) {
         dirtyFlags.formUnion(flags)
         dirtyPIDs.formUnion(pids)
 
         refreshTask?.cancel()
         refreshTask = Task { @MainActor in
-            // 20,000,000 nanoseconds = 20ms
             try? await Task.sleep(nanoseconds: 20_000_000)
             guard !Task.isCancelled else { return }
             self.processPendingRefresh()
         }
     }
-
-    // MARK: - Refresh Pipeline
 
     func refresh() {
         requestRefresh(flags: [.full])
@@ -382,12 +378,8 @@ final class WindowStateStore {
 
     private func beginTimedRefresh(label: String, sequence: Int) -> UInt64 {
 #if DEBUG
-        _ = label
-        _ = sequence
         return DispatchTime.now().uptimeNanoseconds
 #else
-        _ = label
-        _ = sequence
         return 0
 #endif
     }
@@ -400,10 +392,6 @@ final class WindowStateStore {
             "Refresh #\(sequence) \(label) took \(elapsedText)ms",
             logger: AppLog.windowState
         )
-#else
-        _ = label
-        _ = sequence
-        _ = started
 #endif
     }
 
@@ -493,14 +481,18 @@ final class WindowStateStore {
     }
 
     private func monitorName(for windowBounds: NSRect) -> String? {
+        if windowBounds.origin.x >= AXWindowUtility.stageOffset {
+            return nil
+        }
+
         let center = NSPoint(x: windowBounds.midX, y: windowBounds.midY)
-        if let screen = NSScreen.screens.first(where: { $0.frame.contains(center) }) {
-            return screen.localizedName
+        if let monitor = currentMonitors.first(where: { $0.frame.contains(center) }) {
+            return monitor.name
         }
 
         var best: (name: String, area: CGFloat)?
-        for screen in NSScreen.screens {
-            let overlap = screen.frame.intersection(windowBounds)
+        for monitor in currentMonitors {
+            let overlap = monitor.frame.intersection(windowBounds)
             let area = overlap.width * overlap.height
             if area <= 0 {
                 continue
@@ -510,7 +502,7 @@ final class WindowStateStore {
                 continue
             }
 
-            best = (screen.localizedName, area)
+            best = (monitor.name, area)
         }
 
         return best?.name
