@@ -16,7 +16,6 @@ final class IndicatorWindowController {
 
     func show(text: String, duration: TimeInterval? = 1.25) {
         hideTask?.cancel()
-        AppLog.debug("Showing indicator: \(text)", logger: AppLog.indicator)
         render(text: text)
         isVisible = true
 

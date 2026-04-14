@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let indicatorController = IndicatorWindowController()
     private let loginItemRegistrar = LoginItemRegistrar()
     private let monitorStateStore = MonitorStateStore()
+    private let windowStateStore = WindowStateStore()
     private var hotKeyMonitor: GlobalHotKeyMonitor?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -20,10 +21,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
 
-            self.indicatorController.updateIfVisible(text: self.monitorStateStore.debugText())
+            self.windowStateStore.refresh()
+            self.indicatorController.updateIfVisible(text: self.statusDialogText())
+        }
+
+        windowStateStore.onWindowsChanged = { [weak self] in
+            guard let self else {
+                return
+            }
+
+            self.indicatorController.updateIfVisible(text: self.statusDialogText())
         }
 
         monitorStateStore.startWatching()
+        windowStateStore.startWatching()
 
         hotKeyMonitor = GlobalHotKeyMonitor(key: "s", modifiers: [.option]) { [weak self] in
             Task { @MainActor [weak self] in
@@ -47,7 +58,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         hotKeyMonitor?.stop()
         monitorStateStore.onMonitorsChanged = nil
+        windowStateStore.onWindowsChanged = nil
         monitorStateStore.stopWatching()
+        windowStateStore.stopWatching()
     }
 
     @MainActor
@@ -58,6 +71,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        indicatorController.toggle(text: monitorStateStore.debugText())
+        indicatorController.toggle(text: statusDialogText())
+    }
+
+    private func statusDialogText() -> String {
+        "\(monitorStateStore.debugText())\n\n\(windowStateStore.debugText())"
     }
 }
