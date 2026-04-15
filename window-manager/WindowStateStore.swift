@@ -167,9 +167,7 @@ final class WindowStateStore {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &value) == .success,
               let subrole = value as? String else { return true }
-        // Note: kAXSheetSubrole and kAXDrawerSubrole are not in the public headers
-        let ignoredSubroles = [kAXDialogSubrole, "AXSheet", "AXDrawer"]
-        return !ignoredSubroles.contains(subrole)
+        return !Configuration.ignoredWindowSubroles.contains(subrole)
     }
 
     private func sortByCurrentZOrder(_ snapshots: [WindowSnapshot], raw: [[String: Any]]) -> [WindowSnapshot] {

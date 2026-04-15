@@ -4,7 +4,7 @@ import ApplicationServices
 @MainActor
 final class AXWindowUtility {
     static let shared = AXWindowUtility()
-    static let stageOffset: CGFloat = 10000
+    static let stageOffset = Configuration.stageOffset
     
     func findWindowElement(windowID: Int, pid: pid_t) -> AXUIElement? {
         let appElement = AXUIElementCreateApplication(pid)

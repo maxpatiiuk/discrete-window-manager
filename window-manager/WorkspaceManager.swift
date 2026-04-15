@@ -35,16 +35,12 @@ final class WorkspaceManager {
         let activeWorkspaceID: Int?
     }
 
-    private let managedAppBundleIDs: Set<String> = [
-        "com.google.Chrome",
-        "com.google.Chrome.beta",
-        "com.google.Chrome.dev",
-        "com.google.Chrome.canary",
-        "com.google.chrome.for.testing",
-        "com.microsoft.VSCode",
-        "com.apple.Terminal",
-        "com.googlecode.iterm2"
-    ]
+    private let managedAppBundleIDs = Configuration.managedAppBundleIDs
+
+    private func isManagedApp(bundleID: String?) -> Bool {
+        guard let bundleID else { return false }
+        return managedAppBundleIDs.contains(bundleID)
+    }
 
     // Persistent state
     private var workspaces: [Int: Workspace] = [:]
@@ -272,7 +268,7 @@ final class WorkspaceManager {
                 }
 
                 let screenID = pickBestScreenForWindow(window, monitors: monitors)
-                let wsID = (window.bundleID.map { managedAppBundleIDs.contains($0) } ?? false) ? createWorkspace(screenID: screenID, isManaged: true) : findOrCreateActiveUnmanagedWorkspace(screenID: screenID)
+                let wsID = isManagedApp(bundleID: window.bundleID) ? createWorkspace(screenID: screenID, isManaged: true) : findOrCreateActiveUnmanagedWorkspace(screenID: screenID)
                 addWindowToWorkspace(windowID: winID, workspaceID: wsID, pid: window.ownerPID)
             }
         }
@@ -295,7 +291,7 @@ final class WorkspaceManager {
     private func pickBestScreenForWindow(_ window: WindowStateStore.WindowSnapshot, monitors: [MonitorStateStore.MonitorSnapshot]) -> String {
         if let cur = monitors.first(where: { $0.name == window.monitorName }) { return cur.id }
         guard let bid = window.bundleID, monitors.count > 1 else { return monitors.first?.id ?? "unknown" }
-        if managedAppBundleIDs.contains(bid) {
+        if isManagedApp(bundleID: bid) {
             var counts: [String: Int] = [:]
             for monitor in monitors {
                 counts[monitor.id] = (screenToWorkspaceOrder[monitor.id] ?? []).compactMap { workspaces[$0] }.filter { $0.isManaged }.count

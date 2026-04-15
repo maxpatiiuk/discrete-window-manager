@@ -52,61 +52,71 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotKeys.removeAll()
 
         let monitorCount = monitorStateStore.monitors.count
+        let mods = Configuration.HotKeys.modifiers
+        let moveMods = Configuration.HotKeys.moveModifiers
 
-        hotKeys.append(GlobalHotKeyMonitor(key: "s", modifiers: [.option]) { [weak self] in
+        // Global Actions
+        hotKeys.append(GlobalHotKeyMonitor(key: Configuration.HotKeys.status, modifiers: mods) { [weak self] in
             Task { @MainActor [weak self] in self?.toggleStatusIndicator() }
         })
-        hotKeys.append(GlobalHotKeyMonitor(key: "a", modifiers: [.option]) { [weak self] in
+        hotKeys.append(GlobalHotKeyMonitor(key: Configuration.HotKeys.debug, modifiers: mods) { [weak self] in
             Task { @MainActor [weak self] in self?.toggleDebugIndicator() }
         })
-        hotKeys.append(GlobalHotKeyMonitor(key: "m", modifiers: [.option]) { [weak self] in
+        hotKeys.append(GlobalHotKeyMonitor(key: Configuration.HotKeys.managedToggle, modifiers: mods) { [weak self] in
             Task { @MainActor [weak self] in self?.toggleFocusedWorkspaceManaged() }
         })
-        hotKeys.append(GlobalHotKeyMonitor(key: "h", modifiers: [.option]) { [weak self] in
+        hotKeys.append(GlobalHotKeyMonitor(key: Configuration.HotKeys.moveLeft, modifiers: mods) { [weak self] in
             Task { @MainActor [weak self] in self?.moveActiveWorkspace(direction: -1) }
         })
-        hotKeys.append(GlobalHotKeyMonitor(key: "l", modifiers: [.option]) { [weak self] in
+        hotKeys.append(GlobalHotKeyMonitor(key: Configuration.HotKeys.moveRight, modifiers: mods) { [weak self] in
             Task { @MainActor [weak self] in self?.moveActiveWorkspace(direction: 1) }
         })
 
-        let leftKeys = ["z", "x", "c", "v"]
-        for (i, key) in leftKeys.enumerated() {
-            hotKeys.append(GlobalHotKeyMonitor(key: key, modifiers: [.option]) { [weak self] in
+        // Left Screen Workspaces
+        for (i, key) in Configuration.HotKeys.leftScreenKeys.enumerated() {
+            hotKeys.append(GlobalHotKeyMonitor(key: key, modifiers: mods) { [weak self] in
                 Task { @MainActor [weak self] in self?.switchToWorkspace(screen: 0, index: i) }
             })
         }
-        hotKeys.append(GlobalHotKeyMonitor(key: "b", modifiers: [.option]) { [weak self] in
+        hotKeys.append(GlobalHotKeyMonitor(key: Configuration.HotKeys.leftScreenCycle, modifiers: mods) { [weak self] in
             Task { @MainActor [weak self] in self?.cycleWorkspace(screen: 0) }
         })
 
-        let middleKeys = ["q", "w", "e", "r", "t"]
+        // Middle Screen Workspaces
         let middleScreenIndex = monitorCount > 2 ? 1 : 0
-        let middleWSOffset = monitorCount > 2 ? 0 : 4
-        for (i, key) in middleKeys.enumerated() {
-            hotKeys.append(GlobalHotKeyMonitor(key: key, modifiers: [.option]) { [weak self] in
+        let middleWSOffset = monitorCount > 2 ? 0 : Configuration.HotKeys.leftScreenKeys.count
+        for (i, key) in Configuration.HotKeys.middleScreenKeys.enumerated() {
+            hotKeys.append(GlobalHotKeyMonitor(key: key, modifiers: mods) { [weak self] in
                 Task { @MainActor [weak self] in self?.switchToWorkspace(screen: middleScreenIndex, index: middleWSOffset + i) }
             })
         }
+        hotKeys.append(GlobalHotKeyMonitor(key: Configuration.HotKeys.middleScreenCycle, modifiers: mods) { [weak self] in
+            Task { @MainActor [weak self] in self?.cycleWorkspace(screen: middleScreenIndex) }
+        })
 
-        let rightKeys = ["n", "m", ",", ".", "0"]
+        // Right Screen Workspaces
         let rightScreenIndex = monitorCount > 1 ? (monitorCount - 1) : 0
-        let rightWSOffset = monitorCount > 1 ? 0 : 9
-        for (i, key) in rightKeys.enumerated() {
-            hotKeys.append(GlobalHotKeyMonitor(key: key, modifiers: [.option]) { [weak self] in
+        let rightWSOffset = monitorCount > 1 ? 0 : (middleWSOffset + Configuration.HotKeys.middleScreenKeys.count)
+        for (i, key) in Configuration.HotKeys.rightScreenKeys.enumerated() {
+            hotKeys.append(GlobalHotKeyMonitor(key: key, modifiers: mods) { [weak self] in
                 Task { @MainActor [weak self] in self?.switchToWorkspace(screen: rightScreenIndex, index: rightWSOffset + i) }
             })
         }
+        hotKeys.append(GlobalHotKeyMonitor(key: Configuration.HotKeys.rightScreenCycle, modifiers: mods) { [weak self] in
+            Task { @MainActor [weak self] in self?.cycleWorkspace(screen: rightScreenIndex) }
+        })
 
-        hotKeys.append(GlobalHotKeyMonitor(key: "z", modifiers: [.option, .shift]) { [weak self] in
+        // Window Movement (Move to Screen)
+        hotKeys.append(GlobalHotKeyMonitor(key: Configuration.HotKeys.leftScreenKeys[0], modifiers: moveMods) { [weak self] in
             Task { @MainActor [weak self] in self?.moveFocusedWindowToScreen(0) }
         })
         if monitorCount > 2 {
-            hotKeys.append(GlobalHotKeyMonitor(key: "q", modifiers: [.option, .shift]) { [weak self] in
+            hotKeys.append(GlobalHotKeyMonitor(key: Configuration.HotKeys.middleScreenKeys[0], modifiers: moveMods) { [weak self] in
                 Task { @MainActor [weak self] in self?.moveFocusedWindowToScreen(1) }
             })
         }
         if monitorCount > 1 {
-            hotKeys.append(GlobalHotKeyMonitor(key: "n", modifiers: [.option, .shift]) { [weak self] in
+            hotKeys.append(GlobalHotKeyMonitor(key: Configuration.HotKeys.rightScreenKeys[0], modifiers: moveMods) { [weak self] in
                 Task { @MainActor [weak self] in self?.moveFocusedWindowToScreen(monitorCount - 1) }
             })
         }
