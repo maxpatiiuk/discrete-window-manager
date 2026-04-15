@@ -16,11 +16,14 @@ final class AXObserverManager {
         isWatching = true
 
         let currentPID = NSRunningApplication.current.processIdentifier
+        let apps = NSWorkspace.shared.runningApplications.filter { 
+            $0.activationPolicy == .regular && $0.processIdentifier != currentPID 
+        }
 
-        for app in NSWorkspace.shared.runningApplications {
+        for app in apps {
             let pid = app.processIdentifier
-            if pid != currentPID {
-                attachObserver(to: pid)
+            Task {
+                await attachObserver(to: pid)
             }
         }
 
@@ -33,7 +36,7 @@ final class AXObserverManager {
                 if pid == currentPID { return }
                 
                 Task { @MainActor [weak self] in
-                    self?.attachObserver(to: pid)
+                    await self?.attachObserver(to: pid)
                 }
             }
         )
@@ -63,7 +66,7 @@ final class AXObserverManager {
         appObservers.removeAll()
     }
 
-    private func attachObserver(to pid: pid_t) {
+    private func attachObserver(to pid: pid_t) async {
         if appObservers[pid] != nil { return }
         
         let observer = AppObserver(pid: pid)
@@ -78,7 +81,7 @@ final class AXObserverManager {
             Task { @MainActor [weak self] in self?.handleWindowDestroyed?(element, pid) }
         }
         
-        observer.start()
+        await observer.startAsync()
         appObservers[pid] = observer
     }
 

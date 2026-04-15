@@ -44,7 +44,7 @@ final class WindowStateStore {
     private var refreshSequence = 0
 
     func startWatching() {
-        fullRefresh()
+        refresh()
         axManager.handleWindowCreated = { [weak self] _, pid in Task { @MainActor [weak self] in self?.requestRefresh(flags: [.appWindows], pids: [pid]) } }
         axManager.handleWindowFocused = { [weak self] _, _ in Task { @MainActor [weak self] in self?.requestRefresh(flags: [.focus]) } }
         axManager.handleWindowDestroyed = { [weak self] _, pid in Task { @MainActor [weak self] in self?.requestRefresh(flags: [.appWindows], pids: [pid]) } }
@@ -88,24 +88,26 @@ final class WindowStateStore {
         let pendingPIDs = dirtyPIDs
         dirtyFlags = []
         dirtyPIDs.removeAll()
-        if pendingFlags.contains(.full) { fullRefresh() }
-        else if pendingFlags.contains(.appWindows), !pendingPIDs.isEmpty { refreshDirtyApps(pids: pendingPIDs) }
-        else if pendingFlags.contains(.focus) { applyFocusUpdateOnly() }
+        Task { @MainActor in
+            if pendingFlags.contains(.full) { await fullRefresh() }
+            else if pendingFlags.contains(.appWindows), !pendingPIDs.isEmpty { await refreshDirtyApps(pids: pendingPIDs) }
+            else if pendingFlags.contains(.focus) { applyFocusUpdateOnly() }
+        }
     }
 
-    private func fullRefresh() {
+    private func fullRefresh() async {
         let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let focusedDescriptor = focusedWindowDescriptor(frontmostPID: frontmostPID)
         guard let raw = copyVisibleWindowInfo() else { return }
-        let updated = buildSnapshots(from: raw, limitingPIDs: nil, frontmostPID: frontmostPID, focusedDescriptor: focusedDescriptor, existingWindows: [])
+        let updated = await buildSnapshots(from: raw, limitingPIDs: nil, frontmostPID: frontmostPID, focusedDescriptor: focusedDescriptor, existingWindows: [])
         applyWindowsIfChanged(updated)
     }
 
-    private func refreshDirtyApps(pids: Set<pid_t>) {
+    private func refreshDirtyApps(pids: Set<pid_t>) async {
         guard !pids.isEmpty, let raw = copyVisibleWindowInfo() else { return }
         let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         let focusedDescriptor = focusedWindowDescriptor(frontmostPID: frontmostPID)
-        let updated = buildSnapshots(from: raw, limitingPIDs: pids, frontmostPID: frontmostPID, focusedDescriptor: focusedDescriptor, existingWindows: windows)
+        let updated = await buildSnapshots(from: raw, limitingPIDs: pids, frontmostPID: frontmostPID, focusedDescriptor: focusedDescriptor, existingWindows: windows)
         applyWindowsIfChanged(updated)
     }
 
@@ -120,18 +122,57 @@ final class WindowStateStore {
         CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
     }
 
+    private struct AXWindowMap: @unchecked Sendable {
+        let windows: [Int: AXUIElement]
+    }
+
     private func buildSnapshots(
         from raw: [[String: Any]],
         limitingPIDs: Set<pid_t>?,
         frontmostPID: pid_t?,
         focusedDescriptor: FocusedWindowDescriptor?,
         existingWindows: [WindowSnapshot]
-    ) -> [WindowSnapshot] {
+    ) async -> [WindowSnapshot] {
         var prefix: [WindowSnapshot] = []
         if let limitingPIDs { prefix = existingWindows.filter { !limitingPIDs.contains($0.ownerPID) } }
+        
+        let pidsToScan = Set(raw.compactMap { info -> pid_t? in
+            guard let ownerPIDRaw = info[kCGWindowOwnerPID as String] as? Int else { return nil }
+            let pid = pid_t(ownerPIDRaw)
+            if let limitingPIDs, !limitingPIDs.contains(pid) { return nil }
+            return pid
+        })
+
+        // Pre-fetch all window maps in parallel to avoid blocking on slow apps
+        let appWindowsCache = await withTaskGroup(of: (pid_t, AXWindowMap).self) { group in
+            for pid in pidsToScan {
+                let app = NSRunningApplication(processIdentifier: pid)
+                if app?.activationPolicy != .regular { continue }
+                group.addTask {
+                    let appElement = AXUIElementCreateApplication(pid)
+                    var windowsValue: CFTypeRef?
+                    var windowDict: [Int: AXUIElement] = [:]
+                    if AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsValue) == .success,
+                       let axWindows = windowsValue as? [AXUIElement] {
+                        for axWin in axWindows {
+                            var idValue: CGWindowID = 0
+                            _ = _AXUIElementGetWindow(axWin, &idValue)
+                            windowDict[Int(idValue)] = axWin
+                        }
+                    }
+                    return (pid, AXWindowMap(windows: windowDict))
+                }
+            }
+            var cache: [pid_t: AXWindowMap] = [:]
+            for await (pid, map) in group {
+                cache[pid] = map
+            }
+            return cache
+        }
+
         var extracted: [WindowSnapshot] = []
         var appCache: [pid_t: (bundleID: String?, isRegular: Bool)] = [:]
-        var appWindowsCache: [pid_t: [Int: AXUIElement]] = [:]
+        
         for info in raw {
             guard let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
                   let number = info[kCGWindowNumber as String] as? Int,
@@ -149,7 +190,18 @@ final class WindowStateStore {
                 return info
             }()
             if !appInfo.isRegular { continue }
-            if !isStandardWindow(windowID: number, pid: pid, appWindowsCache: &appWindowsCache) { continue }
+            
+            guard let axWindows = appWindowsCache[pid]?.windows, let element = axWindows[number] else { continue }
+            var value: CFTypeRef?
+            let isStandard = AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &value) != .success || {
+                guard let subrole = value as? String else { return true }
+                return !Configuration.ignoredWindowSubroles.contains(subrole)
+            }()
+            if !isStandard { continue }
+            
+            // Allow other events to be processed between window processing
+            await Task.yield()
+
             let title = (info[kCGWindowName as String] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "<untitled>"
             let monitorName = monitorName(for: cgBounds)
             let spaceID = (info["kCGWindowWorkspace"] as? NSNumber)?.intValue
@@ -161,31 +213,6 @@ final class WindowStateStore {
         let merged = prefix + extracted
         let withFocus = applyingFocusMarkers(to: merged, frontmostPID: frontmostPID, focusedDescriptor: focusedDescriptor)
         return sortByCurrentZOrder(withFocus, raw: raw)
-    }
-
-    private func isStandardWindow(windowID: Int, pid: pid_t, appWindowsCache: inout [pid_t: [Int: AXUIElement]]) -> Bool {
-        if appWindowsCache[pid] == nil {
-            let appElement = AXUIElementCreateApplication(pid)
-            var windowsValue: CFTypeRef?
-            if AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsValue) == .success,
-               let axWindows = windowsValue as? [AXUIElement] {
-                var windowDict: [Int: AXUIElement] = [:]
-                for axWin in axWindows {
-                    var idValue: CGWindowID = 0
-                    _ = _AXUIElementGetWindow(axWin, &idValue)
-                    windowDict[Int(idValue)] = axWin
-                }
-                appWindowsCache[pid] = windowDict
-            } else {
-                appWindowsCache[pid] = [:]
-            }
-        }
-
-        guard let element = appWindowsCache[pid]?[windowID] else { return false }
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &value) == .success,
-              let subrole = value as? String else { return true }
-        return !Configuration.ignoredWindowSubroles.contains(subrole)
     }
 
     private func sortByCurrentZOrder(_ snapshots: [WindowSnapshot], raw: [[String: Any]]) -> [WindowSnapshot] {

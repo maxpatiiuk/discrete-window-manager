@@ -18,30 +18,38 @@ final class AppObserver {
     }
 
     func start() {
-        // 1. Create the C-Callback Bridge
-        let refcon = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
-        
-        var observerRaw: AXObserver?
-        let error = AXObserverCreate(pid, observerCallback, &observerRaw)
-        
-        guard error == .success, let observer = observerRaw else {
-            return // App likely lacks accessibility privileges or died
+        Task {
+            await startAsync()
         }
-        
-        self.axObserver = observer
+    }
 
-        // 2. Register for specific Edge-Triggers
-        let appElement = AXUIElementCreateApplication(pid)
-        
-        let notifications: [CFString] = [
-            kAXWindowCreatedNotification as CFString,
-            kAXFocusedWindowChangedNotification as CFString,
-            kAXUIElementDestroyedNotification as CFString
-        ]
-        
-        for notification in notifications {
-            AXObserverAddNotification(observer, appElement, notification, refcon)
-        }
+    func startAsync() async {
+        let pid = self.pid
+        let refcon = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+
+        let result = await Task.detached(priority: .userInitiated) { () -> (AXObserver?, AXUIElement?) in
+            var observerRaw: AXObserver?
+            let error = AXObserverCreate(pid, observerCallback, &observerRaw)
+            
+            guard error == .success, let observer = observerRaw else {
+                return (nil, nil)
+            }
+            
+            let appElement = AXUIElementCreateApplication(pid)
+            let notifications: [CFString] = [
+                kAXWindowCreatedNotification as CFString,
+                kAXFocusedWindowChangedNotification as CFString,
+                kAXUIElementDestroyedNotification as CFString
+            ]
+            
+            for notification in notifications {
+                AXObserverAddNotification(observer, appElement, notification, refcon)
+            }
+            return (observer, appElement)
+        }.value
+
+        guard let observer = result.0 else { return }
+        self.axObserver = observer
 
         // 3. Attach to the Main Run Loop (Mandatory for AXObserver to fire)
         CFRunLoopAddSource(
