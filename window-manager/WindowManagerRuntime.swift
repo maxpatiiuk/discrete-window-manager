@@ -147,7 +147,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func moveFocusedWindowToScreen(_ screen: Int) {
         workspaceManager.moveFocusedWindowToScreen(screenIndex: screen, windows: windowStateStore.windows, monitors: monitorStateStore.monitors)
-        reconcileAndActuate(warpMouse: true, forceCapture: true)
+        reconcileAndActuate(warpMouse: true, forceWarp: true, forceCapture: true)
     }
 
     @MainActor
@@ -167,25 +167,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func toggleFocusedWorkspaceManaged() {
-        let result = workspaceManager.reconcile(windows: windowStateStore.windows, monitors: monitorStateStore.monitors)
-        guard let focused = windowStateStore.windows.first(where: { $0.isFocused }),
-              let wsID = result.screenWorkspaces.flatMap({ $0.workspaces }).first(where: { $0.windowIDs.contains(focused.windowNumber) })?.id else { return }
+        let windows = windowStateStore.windows
+        let monitors = monitorStateStore.monitors
+        let result = workspaceManager.reconcile(windows: windows, monitors: monitors)
+        
+        guard let focused = windows.first(where: { $0.isFocused }),
+              let ws = result.screenWorkspaces.flatMap({ $0.workspaces }).first(where: { $0.windowIDs.contains(focused.windowNumber) }),
+              let screenID = result.screenWorkspaces.first(where: { s in s.workspaces.contains(where: { $0.id == ws.id }) })?.screenID else { return }
 
-        workspaceManager.toggleManaged(workspaceID: wsID)
+        // Capture positions before any movement/toggle
+        workspaceManager.captureCurrentWindowPositions(windows: windows)
+
+        if !ws.isManaged && ws.windowIDs.count > 1 {
+            // Extract focused app to new managed workspace
+            _ = workspaceManager.moveFocusedWindowToNewWorkspace(windowID: focused.windowNumber, screenID: screenID, isManaged: true)
+        } else {
+            workspaceManager.toggleManaged(workspaceID: ws.id)
+        }
+
         reconcileAndActuate(forceCapture: true)
         
         let newResult = workspaceManager.reconcile(windows: windowStateStore.windows, monitors: monitorStateStore.monitors)
         indicatorController.show(textsByScreenID: statusTextsByResult(newResult), duration: 1.5)
     }
 
-    private func reconcileAndActuate(warpMouse: Bool = false, forceCapture: Bool = false) {
+    private func reconcileAndActuate(warpMouse: Bool = false, forceWarp: Bool = false, forceCapture: Bool = false) {
         let result = workspaceManager.reconcile(windows: windowStateStore.windows, monitors: monitorStateStore.monitors, forceCapture: forceCapture)
         actuator.apply(layouts: result.layouts)
-        if warpMouse, let targetWinID = result.targetFocusWindowNumber {
-            warpMouseToFocusedWindow(targetWinID, layouts: result.layouts)
+        
+        if let targetWinID = result.targetFocusWindowNumber {
+            if forceWarp {
+                warpMouseToFocusedWindow(targetWinID, layouts: result.layouts)
+            } else if warpMouse {
+                warpMouseIfNeeded(targetWinID, layouts: result.layouts)
+            }
         }
+        
         if indicatorController.isVisible {
             indicatorController.updateIfVisible(textsByScreenID: statusTextsByResult(result))
+        }
+    }
+
+    private func warpMouseIfNeeded(_ windowID: Int, layouts: [WorkspaceManager.WindowLayout]) {
+        guard let layout = layouts.first(where: { $0.windowNumber == windowID }),
+              let monitorID = layout.currentMonitorID,
+              let targetMonitor = monitorStateStore.monitors.first(where: { $0.id == monitorID }) else { return }
+        
+        let currentMousePoint = CGEvent(source: nil)?.location ?? .zero
+        
+        // Only warp if the mouse is not already on the target monitor
+        if !targetMonitor.frame.contains(currentMousePoint) {
+            warpMouseToFocusedWindow(windowID, layouts: layouts)
+        } else {
+            // Just focus the window without moving the mouse
+            AXWindowUtility.shared.focusWindow(windowID: windowID, pid: layout.ownerPID)
         }
     }
 

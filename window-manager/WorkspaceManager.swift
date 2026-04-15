@@ -148,10 +148,25 @@ final class WorkspaceManager {
         workspaces[newWSID]?.windowIDs.insert(windowID)
     }
 
+    func captureCurrentWindowPositions(windows: [WindowStateStore.WindowSnapshot]) {
+        for window in windows where abs(window.bounds.origin.x) < Configuration.visibleThreshold {
+            windowToLastRect[window.windowNumber] = window.bounds
+        }
+    }
+
+    func moveFocusedWindowToNewWorkspace(windowID: Int, screenID: String, isManaged: Bool) -> Int {
+        let newWSID = createWorkspace(screenID: screenID, isManaged: isManaged)
+        if let oldWSID = windowToWorkspace[windowID] {
+            moveWindowToWorkspace(windowID: windowID, from: oldWSID, to: newWSID)
+        }
+        activeWorkspacePerScreen[screenID] = newWSID
+        return newWSID
+    }
+
     func reconcile(windows: [WindowStateStore.WindowSnapshot], monitors: [MonitorStateStore.MonitorSnapshot], forceCapture: Bool = false) -> ReconciliationResult {
         // 1. Initial Position Capture (MUST run before assignment)
         if isFirstReconciliation {
-            for window in windows where abs(window.bounds.origin.x) < 20000 {
+            for window in windows where abs(window.bounds.origin.x) < Configuration.visibleThreshold {
                 AppLog.debug("Initial capture for window \(window.windowNumber) (\(window.ownerName)): \(window.bounds)", logger: AppLog.windowState)
                 windowToLastRect[window.windowNumber] = window.bounds
                 if let actual = monitors.first(where: { $0.frame.contains(window.bounds.origin) }) {
@@ -167,7 +182,7 @@ final class WorkspaceManager {
                 if let prevWSID = previousActiveWorkspacePerScreen[monitor.id], let activeWSID = activeWorkspacePerScreen[monitor.id],
                    prevWSID != activeWSID, let ws = workspaces[prevWSID], !ws.isManaged {
                     for winID in ws.windowIDs {
-                        if let win = windows.first(where: { $0.windowNumber == winID }), abs(win.bounds.origin.x) < 20000 {
+                        if let win = windows.first(where: { $0.windowNumber == winID }), abs(win.bounds.origin.x) < Configuration.visibleThreshold {
                             if let live = AXWindowUtility.shared.getWindowFrame(windowID: winID, pid: win.ownerPID) {
                                 AppLog.debug("Live capture for unmanaged window \(winID) BEFORE switch: \(live)", logger: AppLog.windowState)
                                 windowToLastRect[winID] = live
@@ -198,7 +213,7 @@ final class WorkspaceManager {
                 let isWSActive = (wsID == activeWSID)
                 for winID in ws.windowIDs {
                     guard let window = windows.first(where: { $0.windowNumber == winID }) else { continue }
-                    let isVisibleNow = abs(window.bounds.origin.x) < 20000
+                    let isVisibleNow = abs(window.bounds.origin.x) < Configuration.visibleThreshold
 
                     if isVisibleNow {
                         if let actual = monitors.first(where: { $0.frame.contains(window.bounds.origin) }) {
@@ -210,7 +225,8 @@ final class WorkspaceManager {
                         if targetFocusWinID == nil && window.isFocused { targetFocusWinID = winID }
                         let targetFrame: NSRect
                         if ws.isManaged { targetFrame = monitor.frame } else {
-                            let orig = windowToLastRect[winID] ?? window.bounds
+                            var orig = windowToLastRect[winID] ?? window.bounds
+                            if abs(orig.origin.x) >= Configuration.visibleThreshold { orig = monitor.frame } // Fallback to fullscreen if position is lost or on stage
                             let curMonitor = monitors.first(where: { $0.frame.contains(orig.origin) }) ?? monitors.first(where: { $0.name == window.monitorName }) ?? monitor
                             if curMonitor.id != monitor.id {
                                 let rx = orig.origin.x - curMonitor.frame.origin.x
@@ -259,7 +275,7 @@ final class WorkspaceManager {
                 }
             } else {
                 // NEW WINDOW DISCOVERY:
-                if abs(window.bounds.origin.x) < 20000 {
+                if abs(window.bounds.origin.x) < Configuration.visibleThreshold {
                     AppLog.debug("Discovery capture for window \(winID) (\(window.ownerName)): \(window.bounds)", logger: AppLog.windowState)
                     windowToLastRect[winID] = window.bounds
                     if let actual = monitors.first(where: { $0.frame.contains(window.bounds.origin) }) {
@@ -304,7 +320,7 @@ final class WorkspaceManager {
     private func updateActiveWorkspaces(_ windows: [WindowStateStore.WindowSnapshot], monitors: [MonitorStateStore.MonitorSnapshot]) {
         if let lastSwitch = lastManualSwitchTime, Date().timeIntervalSince(lastSwitch) < 0.25 { return }
         if let focused = windows.first(where: { $0.isFocused }), let wsID = windowToWorkspace[focused.windowNumber], let screenID = workspaceToScreen[wsID] {
-            if abs(focused.bounds.origin.x) < 20000 { activeWorkspacePerScreen[screenID] = wsID }
+            if abs(focused.bounds.origin.x) < Configuration.visibleThreshold { activeWorkspacePerScreen[screenID] = wsID }
         }
         for monitor in monitors {
             if activeWorkspacePerScreen[monitor.id] == nil {
@@ -342,7 +358,7 @@ final class WorkspaceManager {
         var lines: [String] = []
         for (index, ws) in screen.workspaces.enumerated() {
             let prefix = (ws.id == screen.activeWorkspaceID) ? "> " : "  "
-            let managedMarker = ws.isManaged ? "[M] " : ""
+            let unmanagedMarker = ws.isManaged ? "" : "G: "
             let winNames = ws.windowIDs.compactMap { id in windows.first(where: { $0.windowNumber == id })?.ownerName }
             let name: String
             if winNames.isEmpty { name = "Empty" }
@@ -351,7 +367,7 @@ final class WorkspaceManager {
                 let unique = Array(Set(winNames)).sorted()
                 name = "\(unique[0]) + \(winNames.count - 1) others"
             }
-            lines.append("\(prefix)\(index + 1): \(managedMarker)\(name)")
+            lines.append("\(prefix)\(index + 1): \(unmanagedMarker)\(name)")
         }
         return lines.joined(separator: "\n")
     }

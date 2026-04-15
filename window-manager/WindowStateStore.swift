@@ -235,7 +235,7 @@ final class WindowStateStore {
 
     private func matchesFocusedWindow(windowNumber: Int, title: String, bounds: NSRect, focused: FocusedWindowDescriptor?) -> Bool {
         guard let focused else { return false }
-        if abs(bounds.origin.x) >= 5000 { return false }
+        if abs(bounds.origin.x) >= Configuration.visibleThreshold { return false }
         if let targetID = focused.windowID, targetID > 0 { return windowNumber == targetID }
         if let focusedTitle = focused.title, focusedTitle != title { return false }
         if let focusedFrame = focused.frame {
@@ -245,7 +245,7 @@ final class WindowStateStore {
     }
 
     private func monitorName(for windowBounds: NSRect) -> String? {
-        if abs(windowBounds.origin.x) >= 5000 { return nil }
+        if abs(windowBounds.origin.x) >= Configuration.visibleThreshold { return nil }
         let center = NSPoint(x: windowBounds.midX, y: windowBounds.midY)
         if let monitor = currentMonitors.first(where: { $0.frame.contains(center) }) { return monitor.name }
         var best: (name: String, area: CGFloat)?

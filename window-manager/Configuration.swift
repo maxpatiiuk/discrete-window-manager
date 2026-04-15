@@ -2,7 +2,10 @@ import AppKit
 import Foundation
 
 enum Configuration {
-    /// App bundle IDs that should be automatically managed and resized to full screen.
+
+    /// Only apps listed here will be automatically resized and managed.
+    /// Add to this list any app you use commonly and verified for compatibility.
+    /// You can get app bundle IDs using the script mentioned in the README.md
     static let managedAppBundleIDs: Set<String> = [
         "com.google.Chrome",
         "com.google.Chrome.beta",
@@ -22,7 +25,11 @@ enum Configuration {
     ]
 
     /// The coordinate offset used to hide windows by moving them off-screen.
-    static let stageOffset: CGFloat = 10000
+    /// This corresponds to lower right corner.
+    static let stageOffset: CGFloat = 30000
+
+    /// Threshold to determine if a window is on-screen or on the stage.
+    static let visibleThreshold: CGFloat = 15000
 
     /// Hotkey definitions
     enum HotKeys {
@@ -31,7 +38,7 @@ enum Configuration {
 
         static let status = "s"
         static let debug = "a"
-        static let managedToggle = "m"
+        static let managedToggle = "g"
         static let moveLeft = "h"
         static let moveRight = "l"
 
