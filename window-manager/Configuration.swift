@@ -38,7 +38,7 @@ enum Configuration {
 
         static let status = "s"
         static let debug = "a"
-        static let managedToggle = "g"
+        static let managedToggle = "u"
         static let moveLeft = "h"
         static let moveRight = "l"
 

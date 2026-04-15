@@ -358,7 +358,7 @@ final class WorkspaceManager {
         var lines: [String] = []
         for (index, ws) in screen.workspaces.enumerated() {
             let prefix = (ws.id == screen.activeWorkspaceID) ? "> " : "  "
-            let unmanagedMarker = ws.isManaged ? "" : "G: "
+            let unmanagedMarker = ws.isManaged ? "" : "U: "
             let winNames = ws.windowIDs.compactMap { id in windows.first(where: { $0.windowNumber == id })?.ownerName }
             let name: String
             if winNames.isEmpty { name = "Empty" }
