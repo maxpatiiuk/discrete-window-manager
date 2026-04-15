@@ -267,7 +267,7 @@ final class WindowStateStore {
     }
 
     private func monitorName(for windowBounds: NSRect) -> String? {
-        if windowBounds.origin.x >= AXWindowUtility.stageOffset { return nil }
+        if windowBounds.origin.x >= 20000 { return nil }
         let center = NSPoint(x: windowBounds.midX, y: windowBounds.midY)
         if let monitor = currentMonitors.first(where: { $0.frame.contains(center) }) { return monitor.name }
         var best: (name: String, area: CGFloat)?

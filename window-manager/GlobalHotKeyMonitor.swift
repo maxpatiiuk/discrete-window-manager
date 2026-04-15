@@ -48,17 +48,6 @@ final class GlobalHotKeyMonitor {
                     return nil
                 }
 
-                #if DEBUG
-                if nsevent.charactersIgnoringModifiers?.lowercased() == monitor.key {
-                    let activeModifiers = nsevent.modifierFlags.intersection(.deviceIndependentFlagsMask)
-                    if activeModifiers != monitor.modifiers {
-                        // This log helps debug why some combinations don't match
-                        // Use a cheaper way to log modifiers
-                        AppLog.debug("Hotkey MISMATCH for \(monitor.key): expected \(monitor.modifiers.rawValue), got \(activeModifiers.rawValue)", logger: AppLog.hotKey)
-                    }
-                }
-                #endif
-
                 return Unmanaged.passRetained(event)
             },
             userInfo: ref

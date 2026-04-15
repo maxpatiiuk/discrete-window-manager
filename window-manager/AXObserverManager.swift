@@ -6,20 +6,17 @@ final class AXObserverManager {
     private var workspaceObservers: [NSObjectProtocol] = []
     private var isWatching = false
     
-    // Route these to your WindowStateStore cache
+    // Callbacks
     var handleWindowCreated: ((AXUIElement, pid_t) -> Void)?
     var handleWindowFocused: ((AXUIElement, pid_t) -> Void)?
     var handleWindowDestroyed: ((AXUIElement, pid_t) -> Void)?
 
     func startWatching() {
-        guard !isWatching else {
-            return
-        }
+        guard !isWatching else { return }
         isWatching = true
 
         let currentPID = NSRunningApplication.current.processIdentifier
 
-        // 1. Bootstrap currently running apps
         for app in NSWorkspace.shared.runningApplications {
             let pid = app.processIdentifier
             if pid != currentPID {
@@ -27,7 +24,6 @@ final class AXObserverManager {
             }
         }
 
-        // 2. Watch for future app lifecycle events
         let nc = NSWorkspace.shared.notificationCenter
         
         workspaceObservers.append(
@@ -45,25 +41,22 @@ final class AXObserverManager {
         workspaceObservers.append(
             nc.addObserver(forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { [weak self] notification in
                 guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+                let pid = app.processIdentifier
+                
                 Task { @MainActor [weak self] in
-                    self?.detachObserver(from: app.processIdentifier)
+                    self?.detachObserver(from: pid)
                 }
             }
         )
     }
 
     func stopWatching() {
-        guard isWatching else {
-            return
-        }
         isWatching = false
-
-        let nc = NSWorkspace.shared.notificationCenter
         for observer in workspaceObservers {
-            nc.removeObserver(observer)
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
         }
         workspaceObservers.removeAll()
-
+        
         for observer in appObservers.values {
             observer.stop()
         }
@@ -71,18 +64,18 @@ final class AXObserverManager {
     }
 
     private func attachObserver(to pid: pid_t) {
-        guard appObservers[pid] == nil else { return }
+        if appObservers[pid] != nil { return }
         
         let observer = AppObserver(pid: pid)
         
         observer.onWindowCreated = { [weak self] element in
-            self?.handleWindowCreated?(element, pid)
+            Task { @MainActor [weak self] in self?.handleWindowCreated?(element, pid) }
         }
         observer.onWindowFocused = { [weak self] element in
-            self?.handleWindowFocused?(element, pid)
+            Task { @MainActor [weak self] in self?.handleWindowFocused?(element, pid) }
         }
         observer.onWindowDestroyed = { [weak self] element in
-            self?.handleWindowDestroyed?(element, pid)
+            Task { @MainActor [weak self] in self?.handleWindowDestroyed?(element, pid) }
         }
         
         observer.start()
