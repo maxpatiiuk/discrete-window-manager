@@ -63,7 +63,7 @@ final class AXWindowUtility {
         AXUIElementSetAttributeValue(element, kAXMainAttribute as CFString, kCFBooleanTrue)
         AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
         if let app = NSRunningApplication(processIdentifier: pid) {
-            app.activate()
+            app.activate(options: .activateIgnoringOtherApps)
         }
         AXUIElementPerformAction(element, kAXRaiseAction as CFString)
     }

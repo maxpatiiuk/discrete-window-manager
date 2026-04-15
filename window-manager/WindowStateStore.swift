@@ -117,7 +117,7 @@ final class WindowStateStore {
     }
 
     private func copyVisibleWindowInfo() -> [[String: Any]]? {
-        CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+        CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
     }
 
     private func buildSnapshots(
@@ -131,6 +131,7 @@ final class WindowStateStore {
         if let limitingPIDs { prefix = existingWindows.filter { !limitingPIDs.contains($0.ownerPID) } }
         var extracted: [WindowSnapshot] = []
         var appCache: [pid_t: (bundleID: String?, isRegular: Bool)] = [:]
+        var appWindowsCache: [pid_t: [Int: AXUIElement]] = [:]
         for info in raw {
             guard let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
                   let number = info[kCGWindowNumber as String] as? Int,
@@ -148,7 +149,7 @@ final class WindowStateStore {
                 return info
             }()
             if !appInfo.isRegular { continue }
-            if !isStandardWindow(windowID: number, pid: pid) { continue }
+            if !isStandardWindow(windowID: number, pid: pid, appWindowsCache: &appWindowsCache) { continue }
             let title = (info[kCGWindowName as String] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "<untitled>"
             let monitorName = monitorName(for: cgBounds)
             let spaceID = (info["kCGWindowWorkspace"] as? NSNumber)?.intValue
@@ -162,8 +163,25 @@ final class WindowStateStore {
         return sortByCurrentZOrder(withFocus, raw: raw)
     }
 
-    private func isStandardWindow(windowID: Int, pid: pid_t) -> Bool {
-        guard let element = AXWindowUtility.shared.findWindowElement(windowID: windowID, pid: pid) else { return false }
+    private func isStandardWindow(windowID: Int, pid: pid_t, appWindowsCache: inout [pid_t: [Int: AXUIElement]]) -> Bool {
+        if appWindowsCache[pid] == nil {
+            let appElement = AXUIElementCreateApplication(pid)
+            var windowsValue: CFTypeRef?
+            if AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsValue) == .success,
+               let axWindows = windowsValue as? [AXUIElement] {
+                var windowDict: [Int: AXUIElement] = [:]
+                for axWin in axWindows {
+                    var idValue: CGWindowID = 0
+                    _ = _AXUIElementGetWindow(axWin, &idValue)
+                    windowDict[Int(idValue)] = axWin
+                }
+                appWindowsCache[pid] = windowDict
+            } else {
+                appWindowsCache[pid] = [:]
+            }
+        }
+
+        guard let element = appWindowsCache[pid]?[windowID] else { return false }
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &value) == .success,
               let subrole = value as? String else { return true }

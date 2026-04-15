@@ -85,8 +85,7 @@ final class AppObserver {
         case kAXUIElementDestroyedNotification:
             let hash = elementHash(element)
             let wasTrackedWindow = trackedWindowElementHashes.remove(hash) != nil
-            let isWindowNow = isWindowLikeElement(element)
-            guard wasTrackedWindow || isWindowNow else {
+            guard wasTrackedWindow else {
                 return
             }
             onWindowDestroyed?(element)

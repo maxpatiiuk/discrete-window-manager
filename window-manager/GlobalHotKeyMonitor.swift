@@ -85,6 +85,10 @@ final class GlobalHotKeyMonitor {
         AppLog.debug("Stopped global hotkey monitor", logger: AppLog.hotKey)
     }
 
+    deinit {
+        stop()
+    }
+
     private func matches(event: NSEvent) -> Bool {
         guard !event.isARepeat else {
             return false
