@@ -4,7 +4,7 @@ import ApplicationServices
 @MainActor
 final class AXWindowUtility {
     static let shared = AXWindowUtility()
-    static let stageOffset: CGFloat = 30000
+    static let stageOffset: CGFloat = 10000
     
     func findWindowElement(windowID: Int, pid: pid_t) -> AXUIElement? {
         let appElement = AXUIElementCreateApplication(pid)
@@ -13,7 +13,7 @@ final class AXWindowUtility {
         guard result == .success, let windows = windowsValue as? [AXUIElement] else { return nil }
         for window in windows {
             var idValue: CGWindowID = 0
-            _AXUIElementGetWindow(window, &idValue)
+            _ = _AXUIElementGetWindow(window, &idValue)
             if Int(idValue) == windowID { return window }
         }
         return nil
@@ -46,9 +46,6 @@ final class AXWindowUtility {
 
     func hideWindow(windowID: Int, pid: pid_t) {
         guard let element = findWindowElement(windowID: windowID, pid: pid) else { return }
-        
-        // Move far away to the right. 
-        // 30,000 is safe as it's beyond any reasonable screen resolution.
         var point = CGPoint(x: Self.stageOffset, y: Self.stageOffset)
         if let posValue = AXValueCreate(.cgPoint, &point) {
             AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, posValue)
@@ -66,11 +63,8 @@ final class AXWindowUtility {
         AXUIElementSetAttributeValue(element, kAXMainAttribute as CFString, kCFBooleanTrue)
         AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
         if let app = NSRunningApplication(processIdentifier: pid) {
-            app.activate(options: .activateIgnoringOtherApps)
+            app.activate()
         }
         AXUIElementPerformAction(element, kAXRaiseAction as CFString)
     }
 }
-
-@_silgen_name("_AXUIElementGetWindow")
-func _AXUIElementGetWindow(_ element: AXUIElement, _ identifier: UnsafeMutablePointer<CGWindowID>) -> AXError

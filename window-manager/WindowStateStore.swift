@@ -88,7 +88,6 @@ final class WindowStateStore {
         let pendingPIDs = dirtyPIDs
         dirtyFlags = []
         dirtyPIDs.removeAll()
-
         if pendingFlags.contains(.full) { fullRefresh() }
         else if pendingFlags.contains(.appWindows), !pendingPIDs.isEmpty { refreshDirtyApps(pids: pendingPIDs) }
         else if pendingFlags.contains(.focus) { applyFocusUpdateOnly() }
@@ -130,10 +129,8 @@ final class WindowStateStore {
     ) -> [WindowSnapshot] {
         var prefix: [WindowSnapshot] = []
         if let limitingPIDs { prefix = existingWindows.filter { !limitingPIDs.contains($0.ownerPID) } }
-
         var extracted: [WindowSnapshot] = []
         var appCache: [pid_t: (bundleID: String?, isRegular: Bool)] = [:]
-
         for info in raw {
             guard let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
                   let number = info[kCGWindowNumber as String] as? Int,
@@ -141,14 +138,9 @@ final class WindowStateStore {
                   let ownerName = info[kCGWindowOwnerName as String] as? String,
                   let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
                   let cgBounds = CGRect(dictionaryRepresentation: boundsDict) else { continue }
-
             let pid = pid_t(ownerPIDRaw)
             if let limitingPIDs, !limitingPIDs.contains(pid) { continue }
-
-            // FAST FILTER 1: Size
             if cgBounds.width < 100 || cgBounds.height < 100 { continue }
-
-            // FAST FILTER 2: Activation Policy (regular apps only)
             let appInfo = appCache[pid] ?? {
                 let app = NSRunningApplication(processIdentifier: pid)
                 let info = (bundleID: app?.bundleIdentifier, isRegular: app?.activationPolicy == .regular)
@@ -156,41 +148,29 @@ final class WindowStateStore {
                 return info
             }()
             if !appInfo.isRegular { continue }
-
-            // SLOWER FILTER 3: AXSubrole (ignore dialogs/sheets)
-            // We only do this for managed apps to keep performance high
-            // edit: Temporary disabled to test if things work out well without it
-            //if !isStandardWindow(windowID: number, pid: pid) { continue }
-
+            if !isStandardWindow(windowID: number, pid: pid) { continue }
             let title = (info[kCGWindowName as String] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "<untitled>"
             let monitorName = monitorName(for: cgBounds)
             let spaceID = (info["kCGWindowWorkspace"] as? NSNumber)?.intValue
-
             extracted.append(WindowSnapshot(
                 windowNumber: number, ownerName: ownerName, ownerPID: pid, bundleID: appInfo.bundleID,
                 title: title, bounds: cgBounds, monitorName: monitorName, spaceID: spaceID, isFocused: false
             ))
         }
-
         let merged = prefix + extracted
         let withFocus = applyingFocusMarkers(to: merged, frontmostPID: frontmostPID, focusedDescriptor: focusedDescriptor)
         return sortByCurrentZOrder(withFocus, raw: raw)
     }
 
-    /*private func isStandardWindow(windowID: Int, pid: pid_t) -> Bool {
+    private func isStandardWindow(windowID: Int, pid: pid_t) -> Bool {
         guard let element = AXWindowUtility.shared.findWindowElement(windowID: windowID, pid: pid) else { return false }
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &value) == .success,
-              let subrole = value as? String else { 
-            // If no subrole, it might be a simple app or Chrome's main window.
-            // Some apps don't report subrole correctly. We assume true for safety unless it's a known non-standard subrole.
-            return true 
-        }
-        
-        // Ignore dialogs, sheets, and drawers
-        let ignoredSubroles = [kAXDialogSubrole, kAXSheetSubrole, kAXDrawerSubrole]
+              let subrole = value as? String else { return true }
+        // Note: kAXSheetSubrole and kAXDrawerSubrole are not in the public headers
+        let ignoredSubroles = [kAXDialogSubrole, "AXSheet", "AXDrawer"]
         return !ignoredSubroles.contains(subrole)
-    }*/
+    }
 
     private func sortByCurrentZOrder(_ snapshots: [WindowSnapshot], raw: [[String: Any]]) -> [WindowSnapshot] {
         var zIndexByWindowID: [Int: Int] = [:]
@@ -246,7 +226,7 @@ final class WindowStateStore {
               let focusedWindowValue else { return nil }
         let focusedWindow = unsafeBitCast(focusedWindowValue, to: AXUIElement.self)
         var windowID: CGWindowID = 0
-        _AXUIElementGetWindow(focusedWindow, &windowID)
+        _ = _AXUIElementGetWindow(focusedWindow, &windowID)
         let title = copyAXString(focusedWindow, attribute: kAXTitleAttribute as CFString)
         var frame: NSRect?
         if let pos = copyAXPoint(focusedWindow, attribute: kAXPositionAttribute as CFString), let size = copyAXSize(focusedWindow, attribute: kAXSizeAttribute as CFString) {
@@ -257,7 +237,7 @@ final class WindowStateStore {
 
     private func matchesFocusedWindow(windowNumber: Int, title: String, bounds: NSRect, focused: FocusedWindowDescriptor?) -> Bool {
         guard let focused else { return false }
-        if bounds.origin.x >= AXWindowUtility.stageOffset { return false }
+        if abs(bounds.origin.x) >= 5000 { return false }
         if let targetID = focused.windowID, targetID > 0 { return windowNumber == targetID }
         if let focusedTitle = focused.title, focusedTitle != title { return false }
         if let focusedFrame = focused.frame {
@@ -267,7 +247,7 @@ final class WindowStateStore {
     }
 
     private func monitorName(for windowBounds: NSRect) -> String? {
-        if windowBounds.origin.x >= 20000 { return nil }
+        if abs(windowBounds.origin.x) >= 5000 { return nil }
         let center = NSPoint(x: windowBounds.midX, y: windowBounds.midY)
         if let monitor = currentMonitors.first(where: { $0.frame.contains(center) }) { return monitor.name }
         var best: (name: String, area: CGFloat)?
@@ -304,3 +284,6 @@ final class WindowStateStore {
 private extension WindowStateStore.WindowSnapshot {
     func withFocused(_ f: Bool) -> Self { WindowStateStore.WindowSnapshot(windowNumber: windowNumber, ownerName: ownerName, ownerPID: ownerPID, bundleID: bundleID, title: title, bounds: bounds, monitorName: monitorName, spaceID: spaceID, isFocused: f) }
 }
+
+@_silgen_name("_AXUIElementGetWindow")
+func _AXUIElementGetWindow(_ element: AXUIElement, _ identifier: UnsafeMutablePointer<CGWindowID>) -> AXError

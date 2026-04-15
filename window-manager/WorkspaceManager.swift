@@ -61,6 +61,7 @@ final class WorkspaceManager {
     private var nextWorkspaceID = 1
     private var lastManualSwitchTime: Date?
     private var lastSwitchedScreenID: String?
+    private var isFirstReconciliation = true
 
     func toggleManaged(workspaceID: Int) {
         if var ws = workspaces[workspaceID] {
@@ -80,12 +81,7 @@ final class WorkspaceManager {
         let order = screenToWorkspaceOrder[monitor.id] ?? []
         guard !order.isEmpty else { return }
         let targetIndex = min(workspaceIndex, order.count - 1)
-        
-        // Save current active workspace as "previous" before updating to "new"
-        if let current = activeWorkspacePerScreen[monitor.id] {
-            previousActiveWorkspacePerScreen[monitor.id] = current
-        }
-        
+        if let current = activeWorkspacePerScreen[monitor.id] { previousActiveWorkspacePerScreen[monitor.id] = current }
         activeWorkspacePerScreen[monitor.id] = order[targetIndex]
         lastManualSwitchTime = Date()
         lastSwitchedScreenID = monitor.id
@@ -97,11 +93,9 @@ final class WorkspaceManager {
         let monitor = sortedMonitors[screenIndex]
         let order = screenToWorkspaceOrder[monitor.id] ?? []
         guard !order.isEmpty else { return }
-        
         let currentWSID = activeWorkspacePerScreen[monitor.id] ?? order[0]
         if let currentIndex = order.firstIndex(of: currentWSID) {
             let nextIndex = (currentIndex + 1) % order.count
-            
             previousActiveWorkspacePerScreen[monitor.id] = currentWSID
             activeWorkspacePerScreen[monitor.id] = order[nextIndex]
             lastManualSwitchTime = Date()
@@ -129,11 +123,7 @@ final class WorkspaceManager {
         let winID = focused.windowNumber
         guard let oldWSID = windowToWorkspace[winID] else { return }
         let sourceScreenID = workspaceToScreen[oldWSID]
-        
-        if sourceScreenID != nil {
-            previousActiveWorkspacePerScreen[sourceScreenID!] = oldWSID
-        }
-
+        if sourceScreenID != nil { previousActiveWorkspacePerScreen[sourceScreenID!] = oldWSID }
         if sourceScreenID == targetMonitor.id {
             let newWSID = createWorkspace(screenID: targetMonitor.id, isManaged: workspaces[oldWSID]?.isManaged ?? false)
             moveWindowToWorkspace(windowID: winID, from: oldWSID, to: newWSID)
@@ -143,7 +133,6 @@ final class WorkspaceManager {
             lastSwitchedScreenID = targetMonitor.id
             return
         }
-
         let isManaged = workspaces[oldWSID]?.isManaged ?? true
         let newWSID = createWorkspace(screenID: targetMonitor.id, isManaged: isManaged)
         moveWindowToWorkspace(windowID: winID, from: oldWSID, to: newWSID)
@@ -164,23 +153,28 @@ final class WorkspaceManager {
     }
 
     func reconcile(windows: [WindowStateStore.WindowSnapshot], monitors: [MonitorStateStore.MonitorSnapshot], forceCapture: Bool = false) -> ReconciliationResult {
-        // 1. SELECTIVE CAPTURE
-        // Only capture unmanaged windows that belong to a workspace that was active but is NO LONGER active.
+        // 1. Initial Position Capture (MUST run before assignment)
+        if isFirstReconciliation {
+            for window in windows where abs(window.bounds.origin.x) < 20000 {
+                AppLog.debug("Initial capture for window \(window.windowNumber) (\(window.ownerName)): \(window.bounds)", logger: AppLog.windowState)
+                windowToLastRect[window.windowNumber] = window.bounds
+                if let actual = monitors.first(where: { $0.frame.contains(window.bounds.origin) }) {
+                    windowToLastDisplayID[window.windowNumber] = actual.id
+                }
+            }
+            isFirstReconciliation = false
+        }
+
+        // 2. Selective Capture for switches (requested by forceCapture)
         if forceCapture {
             for monitor in monitors {
-                if let prevWSID = previousActiveWorkspacePerScreen[monitor.id],
-                   let activeWSID = activeWorkspacePerScreen[monitor.id],
-                   prevWSID != activeWSID,
-                   let ws = workspaces[prevWSID], !ws.isManaged {
-                    
+                if let prevWSID = previousActiveWorkspacePerScreen[monitor.id], let activeWSID = activeWorkspacePerScreen[monitor.id],
+                   prevWSID != activeWSID, let ws = workspaces[prevWSID], !ws.isManaged {
                     for winID in ws.windowIDs {
-                        if let win = windows.first(where: { $0.windowNumber == winID }) {
-                            // Check if actually on screen (not hidden)
-                            if win.bounds.origin.x < 20000 && win.bounds.origin.x > -20000 {
-                                if let live = AXWindowUtility.shared.getWindowFrame(windowID: winID, pid: win.ownerPID) {
-                                    AppLog.debug("Live capture for unmanaged window \(winID) (Workspace \(prevWSID)): \(live)", logger: AppLog.windowState)
-                                    windowToLastRect[winID] = live
-                                }
+                        if let win = windows.first(where: { $0.windowNumber == winID }), abs(win.bounds.origin.x) < 20000 {
+                            if let live = AXWindowUtility.shared.getWindowFrame(windowID: winID, pid: win.ownerPID) {
+                                AppLog.debug("Live capture for unmanaged window \(winID) BEFORE switch: \(live)", logger: AppLog.windowState)
+                                windowToLastRect[winID] = live
                             }
                         }
                     }
@@ -188,15 +182,6 @@ final class WorkspaceManager {
             }
         }
         previousActiveWorkspacePerScreen.removeAll()
-
-        // Display associations should always be updated for windows that are CURRENTLY visible
-        for window in windows {
-            if window.bounds.origin.x < 20000 && window.bounds.origin.x > -20000 {
-                if let actual = monitors.first(where: { $0.frame.contains(window.bounds.origin) }) {
-                    windowToLastDisplayID[window.windowNumber] = actual.id
-                }
-            }
-        }
 
         assignWorkspacesToNewWindows(windows, monitors: monitors)
         updateActiveWorkspaces(windows, monitors: monitors)
@@ -217,12 +202,18 @@ final class WorkspaceManager {
                 let isWSActive = (wsID == activeWSID)
                 for winID in ws.windowIDs {
                     guard let window = windows.first(where: { $0.windowNumber == winID }) else { continue }
+                    let isVisibleNow = abs(window.bounds.origin.x) < 20000
+
+                    if isVisibleNow {
+                        if let actual = monitors.first(where: { $0.frame.contains(window.bounds.origin) }) {
+                            windowToLastDisplayID[winID] = actual.id
+                        }
+                    }
+
                     if isWSActive {
                         if targetFocusWinID == nil && window.isFocused { targetFocusWinID = winID }
                         let targetFrame: NSRect
-                        if ws.isManaged {
-                            targetFrame = monitor.frame
-                        } else {
+                        if ws.isManaged { targetFrame = monitor.frame } else {
                             let orig = windowToLastRect[winID] ?? window.bounds
                             let curMonitor = monitors.first(where: { $0.frame.contains(orig.origin) }) ?? monitors.first(where: { $0.name == window.monitorName }) ?? monitor
                             if curMonitor.id != monitor.id {
@@ -257,22 +248,32 @@ final class WorkspaceManager {
             let winID = window.windowNumber
             if let wsID = windowToWorkspace[winID] {
                 if let lastID = windowToLastDisplayID[winID], lastID != workspaceToScreen[wsID], reconnectedIDs.contains(lastID) {
+                    let oldScreen = workspaceToScreen[wsID]
                     workspaceToScreen[wsID] = lastID
                     activeWorkspacePerScreen[lastID] = wsID
+                    if let oldS = oldScreen { screenToWorkspaceOrder[oldS]?.removeAll(where: { $0 == wsID }) }
+                    if !(screenToWorkspaceOrder[lastID]?.contains(wsID) ?? false) { screenToWorkspaceOrder[lastID, default: []].append(wsID) }
                 }
                 if let assigned = workspaceToScreen[wsID], !currentScreenIDs.contains(assigned) {
                     disconnectedDisplayIDs.insert(assigned)
-                    workspaceToScreen[wsID] = monitors.first?.id ?? "unknown"
+                    let fallback = monitors.first?.id ?? "unknown"
+                    workspaceToScreen[wsID] = fallback
+                    screenToWorkspaceOrder[assigned]?.removeAll(where: { $0 == wsID })
+                    if !(screenToWorkspaceOrder[fallback]?.contains(wsID) ?? false) { screenToWorkspaceOrder[fallback, default: []].append(wsID) }
                 }
             } else {
-                let screenID = pickBestScreenForWindow(window, monitors: monitors)
-                if let bundleID = window.bundleID, managedAppBundleIDs.contains(bundleID) {
-                    let wsID = createWorkspace(screenID: screenID, isManaged: true)
-                    addWindowToWorkspace(windowID: winID, workspaceID: wsID, pid: window.ownerPID)
-                } else {
-                    let wsID = findOrCreateActiveUnmanagedWorkspace(screenID: screenID)
-                    addWindowToWorkspace(windowID: winID, workspaceID: wsID, pid: window.ownerPID)
+                // NEW WINDOW DISCOVERY:
+                if abs(window.bounds.origin.x) < 20000 {
+                    AppLog.debug("Discovery capture for window \(winID) (\(window.ownerName)): \(window.bounds)", logger: AppLog.windowState)
+                    windowToLastRect[winID] = window.bounds
+                    if let actual = monitors.first(where: { $0.frame.contains(window.bounds.origin) }) {
+                        windowToLastDisplayID[winID] = actual.id
+                    }
                 }
+
+                let screenID = pickBestScreenForWindow(window, monitors: monitors)
+                let wsID = (window.bundleID.map { managedAppBundleIDs.contains($0) } ?? false) ? createWorkspace(screenID: screenID, isManaged: true) : findOrCreateActiveUnmanagedWorkspace(screenID: screenID)
+                addWindowToWorkspace(windowID: winID, workspaceID: wsID, pid: window.ownerPID)
             }
         }
         let currentIDs = Set(windows.map { $0.windowNumber })
@@ -307,8 +308,7 @@ final class WorkspaceManager {
     private func updateActiveWorkspaces(_ windows: [WindowStateStore.WindowSnapshot], monitors: [MonitorStateStore.MonitorSnapshot]) {
         if let lastSwitch = lastManualSwitchTime, Date().timeIntervalSince(lastSwitch) < 0.25 { return }
         if let focused = windows.first(where: { $0.isFocused }), let wsID = windowToWorkspace[focused.windowNumber], let screenID = workspaceToScreen[wsID] {
-            let isHidden = focused.bounds.origin.x >= 20000 || focused.bounds.origin.x <= -20000
-            if !isHidden { activeWorkspacePerScreen[screenID] = wsID }
+            if abs(focused.bounds.origin.x) < 20000 { activeWorkspacePerScreen[screenID] = wsID }
         }
         for monitor in monitors {
             if activeWorkspacePerScreen[monitor.id] == nil {
