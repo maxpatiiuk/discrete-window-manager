@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             self.windowStateStore.currentMonitors = self.monitorStateStore.monitors
             self.windowStateStore.refresh()
+            self.setupHotKeys() // Re-map hotkeys when monitor count changes
             self.reconcileAndActuate()
         }
 
@@ -47,6 +48,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setupHotKeys() {
+        // Clear existing hotkeys before re-registering
+        for hk in hotKeys { hk.stop() }
+        hotKeys.removeAll()
+
+        let monitorCount = monitorStateStore.monitors.count
+
         // Core toggles
         hotKeys.append(GlobalHotKeyMonitor(key: "s", modifiers: [.option]) { [weak self] in
             Task { @MainActor [weak self] in self?.toggleStatusIndicator() }
@@ -58,7 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor [weak self] in self?.toggleFocusedWorkspaceManaged() }
         })
 
-        // Workspace Keys
+        // Workspace Keys Mapping
         // Left screen: alt+z,x,c,v,b
         let leftKeys = ["z", "x", "c", "v"]
         for (i, key) in leftKeys.enumerated() {
@@ -70,19 +77,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor [weak self] in self?.cycleWorkspace(screen: 0) }
         })
 
-        // Middle screen: alt+q,w,e,r,t
+        // Middle Keys: alt+q,w,e,r,t
         let middleKeys = ["q", "w", "e", "r", "t"]
+        let middleScreenIndex = monitorCount > 2 ? 1 : 0
+        let middleWSOffset = monitorCount > 2 ? 0 : 4
         for (i, key) in middleKeys.enumerated() {
             hotKeys.append(GlobalHotKeyMonitor(key: key, modifiers: [.option]) { [weak self] in
-                Task { @MainActor [weak self] in self?.switchToWorkspace(screen: 1, index: i) }
+                Task { @MainActor [weak self] in self?.switchToWorkspace(screen: middleScreenIndex, index: middleWSOffset + i) }
             })
         }
 
-        // Right screen: alt+n,m,,,.,0
+        // Right Keys: alt+n,m,,,.,0
         let rightKeys = ["n", "m", ",", ".", "0"]
+        let rightScreenIndex = monitorCount > 1 ? (monitorCount - 1) : 0
+        let rightWSOffset = monitorCount > 1 ? 0 : 9
         for (i, key) in rightKeys.enumerated() {
             hotKeys.append(GlobalHotKeyMonitor(key: key, modifiers: [.option]) { [weak self] in
-                Task { @MainActor [weak self] in self?.switchToWorkspace(screen: 2, index: i) }
+                Task { @MainActor [weak self] in self?.switchToWorkspace(screen: rightScreenIndex, index: rightWSOffset + i) }
             })
         }
 
@@ -90,12 +101,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotKeys.append(GlobalHotKeyMonitor(key: "z", modifiers: [.option, .shift]) { [weak self] in
             Task { @MainActor [weak self] in self?.moveFocusedWindowToScreen(0) }
         })
-        hotKeys.append(GlobalHotKeyMonitor(key: "q", modifiers: [.option, .shift]) { [weak self] in
-            Task { @MainActor [weak self] in self?.moveFocusedWindowToScreen(1) }
-        })
-        hotKeys.append(GlobalHotKeyMonitor(key: "n", modifiers: [.option, .shift]) { [weak self] in
-            Task { @MainActor [weak self] in self?.moveFocusedWindowToScreen(2) }
-        })
+        if monitorCount > 2 {
+            hotKeys.append(GlobalHotKeyMonitor(key: "q", modifiers: [.option, .shift]) { [weak self] in
+                Task { @MainActor [weak self] in self?.moveFocusedWindowToScreen(1) }
+            })
+        }
+        if monitorCount > 1 {
+            hotKeys.append(GlobalHotKeyMonitor(key: "n", modifiers: [.option, .shift]) { [weak self] in
+                Task { @MainActor [weak self] in self?.moveFocusedWindowToScreen(monitorCount - 1) }
+            })
+        }
 
         for hk in hotKeys { hk.start() }
     }
@@ -138,10 +153,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @MainActor
     private func toggleFocusedWorkspaceManaged() {
+        let result = workspaceManager.reconcile(windows: windowStateStore.windows, monitors: monitorStateStore.monitors)
         guard let focused = windowStateStore.windows.first(where: { $0.isFocused }),
-              let wsID = workspaceManager.reconcile(windows: windowStateStore.windows, monitors: monitorStateStore.monitors).screenWorkspaces
-                .flatMap({ $0.workspaces })
-                .first(where: { $0.windowIDs.contains(focused.windowNumber) })?.id else { return }
+              let wsID = result.screenWorkspaces.flatMap({ $0.workspaces }).first(where: { $0.windowIDs.contains(focused.windowNumber) })?.id else { return }
 
         workspaceManager.toggleManaged(workspaceID: wsID)
         reconcileAndActuate()
@@ -155,8 +169,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         
         actuator.apply(layouts: result.layouts)
 
-        if warpMouse {
-            warpMouseToFocusedWindow(result.layouts)
+        if warpMouse, let targetWinID = result.targetFocusWindowNumber {
+            warpMouseToFocusedWindow(targetWinID, layouts: result.layouts)
         }
 
         if indicatorController.isVisible {
@@ -164,13 +178,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func warpMouseToFocusedWindow(_ layouts: [WorkspaceManager.WindowLayout]) {
-        let visibleWindows = layouts.filter { !$0.isHidden }
-        if let focused = visibleWindows.first(where: { $0.isFocused }) {
-            let center = CGPoint(x: focused.frame.midX, y: focused.frame.midY)
-            AXWindowUtility.shared.warpMouse(to: center)
-            AXWindowUtility.shared.focusWindow(windowID: focused.windowNumber, pid: focused.ownerPID)
-        }
+    private func warpMouseToFocusedWindow(_ windowID: Int, layouts: [WorkspaceManager.WindowLayout]) {
+        guard let layout = layouts.first(where: { $0.windowNumber == windowID }) else { return }
+        
+        let center = CGPoint(x: layout.frame.midX, y: layout.frame.midY)
+        AXWindowUtility.shared.warpMouse(to: center)
+        AXWindowUtility.shared.focusWindow(windowID: windowID, pid: layout.ownerPID)
     }
 
     private func statusTextsByResult(_ result: WorkspaceManager.ReconciliationResult) -> [String: String] {
