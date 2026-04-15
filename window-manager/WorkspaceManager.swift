@@ -51,9 +51,11 @@ final class WorkspaceManager {
     private var windowToWorkspace: [Int: Int] = [:] // windowID -> workspaceID
     private var workspaceToScreen: [Int: String] = [:] // workspaceID -> screenID
     private var activeWorkspacePerScreen: [String: Int] = [:] // screenID -> workspaceID
+    private var windowToLastDisplayID: [Int: String] = [:] // windowID -> last physical screen ID
+    private var disconnectedDisplayIDs: Set<String> = []
     
     private var nextWorkspaceID = 1
-    private var isManualSwitching = false
+    private var lastManualSwitchTime: Date?
     private var lastSwitchedScreenID: String?
 
     func toggleManaged(workspaceID: Int) {
@@ -82,7 +84,6 @@ final class WorkspaceManager {
             return 
         }
 
-        // If requested index is higher than existing, go to the last one
         if workspaceIndex >= wsIDsOnScreen.count {
             AppLog.debug("switchToWorkspace: index \(workspaceIndex) exceeds workspace count (\(wsIDsOnScreen.count)) on screen \(monitor.name), clamping to last", logger: AppLog.hotKey)
         }
@@ -92,7 +93,7 @@ final class WorkspaceManager {
         
         AppLog.info("Switching Screen #\(screenIndex + 1) (\(monitor.name)) to Workspace index \(targetIndex) (ID \(targetWSID))", logger: AppLog.app)
         activeWorkspacePerScreen[monitor.id] = targetWSID
-        isManualSwitching = true
+        lastManualSwitchTime = Date()
         lastSwitchedScreenID = monitor.id
     }
 
@@ -110,7 +111,7 @@ final class WorkspaceManager {
             let targetWSID = wsIDsOnScreen[nextIndex]
             AppLog.info("Cycling Screen #\(screenIndex + 1) (\(monitor.name)) to Workspace \(targetWSID)", logger: AppLog.app)
             activeWorkspacePerScreen[monitor.id] = targetWSID
-            isManualSwitching = true
+            lastManualSwitchTime = Date()
             lastSwitchedScreenID = monitor.id
         }
     }
@@ -123,24 +124,38 @@ final class WorkspaceManager {
         
         let winID = focused.windowNumber
         guard let oldWSID = windowToWorkspace[winID] else { return }
+        let sourceScreenID = workspaceToScreen[oldWSID]
         
-        if workspaceToScreen[oldWSID] == targetMonitor.id {
+        if sourceScreenID == targetMonitor.id {
             let newWSID = createWorkspace(screenID: targetMonitor.id, isManaged: workspaces[oldWSID]?.isManaged ?? false)
             AppLog.info("Splitting window \(winID) to NEW Workspace \(newWSID) on screen \(targetMonitor.name)", logger: AppLog.app)
             moveWindowToWorkspace(windowID: winID, from: oldWSID, to: newWSID)
             activeWorkspacePerScreen[targetMonitor.id] = newWSID
-            isManualSwitching = true
+            windowToLastDisplayID[winID] = targetMonitor.id
+            lastManualSwitchTime = Date()
             lastSwitchedScreenID = targetMonitor.id
             return
         }
 
+        // Move the window to a fresh workspace on the target screen
         let isManaged = workspaces[oldWSID]?.isManaged ?? true
         let newWSID = createWorkspace(screenID: targetMonitor.id, isManaged: isManaged)
         AppLog.info("Moving window \(winID) to Screen #\(screenIndex + 1) (\(targetMonitor.name)) (New WS \(newWSID))", logger: AppLog.app)
         moveWindowToWorkspace(windowID: winID, from: oldWSID, to: newWSID)
         activeWorkspacePerScreen[targetMonitor.id] = newWSID
-        isManualSwitching = true
-        lastSwitchedScreenID = targetMonitor.id
+        windowToLastDisplayID[winID] = targetMonitor.id
+        
+        // --- IMPROVEMENT: Don't leave the source screen blank ---
+        if let sourceID = sourceScreenID {
+            let remainingWSIDs = workspaceToScreen.filter { $0.value == sourceID && $0.key != oldWSID }.map { $0.key }.sorted()
+            if let firstRemaining = remainingWSIDs.first {
+                AppLog.debug("Source screen \(sourceID) switched to Workspace \(firstRemaining) to avoid being blank", logger: AppLog.app)
+                activeWorkspacePerScreen[sourceID] = firstRemaining
+            }
+        }
+        
+        lastManualSwitchTime = Date()
+        lastSwitchedScreenID = targetMonitor.id // Ensure focus ends up on the new screen
     }
 
     private func moveWindowToWorkspace(windowID: Int, from oldWSID: Int, to newWSID: Int) {
@@ -164,12 +179,9 @@ final class WorkspaceManager {
         }
         #endif
 
-        // Determine target focus window with correct priority
-        // Priority 1: If we just switched a screen, pick a window from its active workspace
         if let switchedID = lastSwitchedScreenID,
            let activeWSID = activeWorkspacePerScreen[switchedID],
            let ws = workspaces[activeWSID] {
-            // Pick first available window in this workspace that is present in the snapshot
             targetFocusWinID = ws.windowIDs.first(where: { winID in windows.contains(where: { $0.windowNumber == winID }) })
             if let tid = targetFocusWinID {
                 AppLog.debug("Reconcile: Target focus set to window \(tid) on switched screen \(switchedID)", logger: AppLog.windowState)
@@ -186,16 +198,14 @@ final class WorkspaceManager {
                 
                 for winID in ws.windowIDs {
                     guard let window = windows.first(where: { $0.windowNumber == winID }) else { continue }
-                    
                     if isWSActive {
-                        // Priority 2: If no target yet, use current OS focus IF it's on an active workspace
                         if targetFocusWinID == nil && window.isFocused {
                             targetFocusWinID = winID
                         }
 
                         let targetFrame: NSRect
                         if ws.isManaged {
-                            targetFrame = monitor.visibleFrame
+                            targetFrame = monitor.frame
                         } else {
                             let currentMonitor = monitors.first(where: { $0.frame.contains(window.bounds.origin) })
                                 ?? monitors.first(where: { $0.name == window.monitorName })
@@ -236,7 +246,6 @@ final class WorkspaceManager {
             }
         }
         
-        // Priority 3: Fallback to first visible window
         if targetFocusWinID == nil {
             targetFocusWinID = layouts.first(where: { !$0.isHidden })?.windowNumber
         }
@@ -259,26 +268,61 @@ final class WorkspaceManager {
     }
 
     private func assignWorkspacesToNewWindows(_ windows: [WindowStateStore.WindowSnapshot], monitors: [MonitorStateStore.MonitorSnapshot]) {
+        let currentScreenIDs = Set(monitors.map { $0.id })
+        
+        let reconnectedIDs = disconnectedDisplayIDs.intersection(currentScreenIDs)
+        disconnectedDisplayIDs.subtract(reconnectedIDs)
+
         for window in windows {
-            if windowToWorkspace[window.windowNumber] == nil {
+            let winID = window.windowNumber
+
+            if let wsID = windowToWorkspace[winID] {
+                // Window already has a workspace. Check for display reconnection.
+                if let lastID = windowToLastDisplayID[winID],
+                   lastID != workspaceToScreen[wsID],
+                   reconnectedIDs.contains(lastID) {
+                    
+                    AppLog.info("Home display \(lastID) reconnected. Moving window \(winID) back.", logger: AppLog.app)
+                    workspaceToScreen[wsID] = lastID
+                    activeWorkspacePerScreen[lastID] = wsID
+                }
+                
+                // Handle display disconnection
+                if let assignedScreen = workspaceToScreen[wsID], !currentScreenIDs.contains(assignedScreen) {
+                    disconnectedDisplayIDs.insert(assignedScreen)
+                    let fallbackScreen = monitors.first?.id ?? "unknown"
+                    AppLog.info("Display \(assignedScreen) disconnected. Moving Workspace \(wsID) to \(fallbackScreen)", logger: AppLog.app)
+                    workspaceToScreen[wsID] = fallbackScreen
+                }
+            } else {
+                // New window discovery
                 let screenID = pickBestScreenForWindow(window, monitors: monitors)
                 
                 if let bundleID = window.bundleID, managedAppBundleIDs.contains(bundleID) {
                     let wsID = createWorkspace(screenID: screenID, isManaged: true)
-                    AppLog.info("New managed window \(window.windowNumber) (\(window.ownerName)) -> New Workspace \(wsID)", logger: AppLog.app)
-                    addWindowToWorkspace(windowID: window.windowNumber, workspaceID: wsID)
+                    AppLog.info("New managed window \(winID) (\(window.ownerName)) -> New Workspace \(wsID)", logger: AppLog.app)
+                    addWindowToWorkspace(windowID: winID, workspaceID: wsID)
                 } else {
                     let wsID = findOrCreateActiveUnmanagedWorkspace(screenID: screenID)
-                    AppLog.info("New unmanaged window \(window.windowNumber) (\(window.ownerName)) -> Existing Workspace \(wsID)", logger: AppLog.app)
-                    addWindowToWorkspace(windowID: window.windowNumber, workspaceID: wsID)
+                    AppLog.info("New unmanaged window \(winID) (\(window.ownerName)) -> Existing Workspace \(wsID)", logger: AppLog.app)
+                    addWindowToWorkspace(windowID: winID, workspaceID: wsID)
+                }
+            }
+            
+            // Update last known physical display if window is currently visible
+            if window.bounds.origin.x < AXWindowUtility.stageOffset {
+                if let actualMonitor = monitors.first(where: { $0.frame.contains(window.bounds.origin) }) {
+                    windowToLastDisplayID[winID] = actualMonitor.id
                 }
             }
         }
         
+        // Cleanup
         let currentWindowIDs = Set(windows.map { $0.windowNumber })
         for (winID, wsID) in windowToWorkspace where !currentWindowIDs.contains(winID) {
             AppLog.debug("Removing window \(winID) from Workspace \(wsID)", logger: AppLog.windowState)
             windowToWorkspace.removeValue(forKey: winID)
+            windowToLastDisplayID.removeValue(forKey: winID)
             workspaces[wsID]?.windowIDs.remove(winID)
         }
         
@@ -325,8 +369,7 @@ final class WorkspaceManager {
     }
 
     private func updateActiveWorkspaces(_ windows: [WindowStateStore.WindowSnapshot], monitors: [MonitorStateStore.MonitorSnapshot]) {
-        if isManualSwitching {
-            isManualSwitching = false
+        if let lastSwitch = lastManualSwitchTime, Date().timeIntervalSince(lastSwitch) < 0.25 {
             return
         }
 

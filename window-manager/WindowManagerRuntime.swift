@@ -58,7 +58,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotKeys.append(GlobalHotKeyMonitor(key: "s", modifiers: [.option]) { [weak self] in
             Task { @MainActor [weak self] in self?.toggleStatusIndicator() }
         })
-        hotKeys.append(GlobalHotKeyMonitor(key: "d", modifiers: [.option]) { [weak self] in
+        // alt+d is already taken by vscode
+        hotKeys.append(GlobalHotKeyMonitor(key: "a", modifiers: [.option]) { [weak self] in
             Task { @MainActor [weak self] in self?.toggleDebugIndicator() }
         })
         hotKeys.append(GlobalHotKeyMonitor(key: "m", modifiers: [.option]) { [weak self] in

@@ -53,7 +53,6 @@ final class IndicatorWindowController {
             return
         }
 
-        AppLog.debug("Updating visible indicators", logger: AppLog.indicator)
         render(textsByScreenID: textsByScreenID)
     }
 

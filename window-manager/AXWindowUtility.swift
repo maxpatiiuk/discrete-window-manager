@@ -89,12 +89,28 @@ final class AXWindowUtility {
 
     func focusWindow(windowID: Int, pid: pid_t) {
         guard let element = findWindowElement(windowID: windowID, pid: pid) else { return }
+        
         AppLog.debug("Focusing window \(windowID)", logger: AppLog.windowState)
+        
+        let appElement = AXUIElementCreateApplication(pid)
+        
+        // 1. Set the window as the focused window of its application
+        // This is often more reliable than setting kAXFocusedAttribute on the window itself
+        AXUIElementSetAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, element)
+        
+        // 2. Set the window as the main window
         AXUIElementSetAttributeValue(element, kAXMainAttribute as CFString, kCFBooleanTrue)
         
+        // 3. Set the window as the focused window
+        AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        
+        // 4. Make sure the application is active
         if let app = NSRunningApplication(processIdentifier: pid) {
             app.activate(options: .activateIgnoringOtherApps)
         }
+        
+        // 5. Raise the window to the front
+        AXUIElementPerformAction(element, kAXRaiseAction as CFString)
     }
 }
 

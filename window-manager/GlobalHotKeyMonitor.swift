@@ -6,8 +6,8 @@ import CoreGraphics
 import Foundation
 
 final class GlobalHotKeyMonitor {
-    private let key: String
-    private let modifiers: NSEvent.ModifierFlags
+    let key: String
+    let modifiers: NSEvent.ModifierFlags
     private let handler: () -> Void
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -43,10 +43,21 @@ final class GlobalHotKeyMonitor {
                     .takeUnretainedValue()
 
                 if monitor.matches(event: nsevent) {
-                    AppLog.debug("Received global hotkey for \(monitor.key)", logger: AppLog.hotKey)
+                    AppLog.debug("Received global hotkey for \(monitor.shortcutDescription)", logger: AppLog.hotKey)
                     monitor.handler()
                     return nil
                 }
+
+                #if DEBUG
+                if nsevent.charactersIgnoringModifiers?.lowercased() == monitor.key {
+                    let activeModifiers = nsevent.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                    if activeModifiers != monitor.modifiers {
+                        // This log helps debug why some combinations don't match
+                        // Use a cheaper way to log modifiers
+                        AppLog.debug("Hotkey MISMATCH for \(monitor.key): expected \(monitor.modifiers.rawValue), got \(activeModifiers.rawValue)", logger: AppLog.hotKey)
+                    }
+                }
+                #endif
 
                 return Unmanaged.passRetained(event)
             },
@@ -96,7 +107,7 @@ final class GlobalHotKeyMonitor {
             && event.charactersIgnoringModifiers?.lowercased() == key
     }
 
-    private var shortcutDescription: String {
+    var shortcutDescription: String {
         var parts: [String] = []
 
         if modifiers.contains(.control) {
