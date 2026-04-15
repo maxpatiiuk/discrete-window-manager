@@ -1,0 +1,13 @@
+{
+  "scripts": {
+    "build": "vite build",
+    "watch": "vite build --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.12.2",
+    "@types/phoenix": "github:mafredri/phoenix-typings#main",
+    "typescript": "^6.0.2",
+    "vite": "^8.0.0"
+  }
+}
